@@ -1,0 +1,17 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+
+# Local evaluation and browser artifacts
+outputs/
+output/
+.playwright-cli/
+.pytest_cache/
+!uv.lock

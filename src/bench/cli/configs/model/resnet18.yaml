@@ -1,0 +1,4 @@
+_target_: bench.adapters.torchvision.TorchvisionAdapter.from_checkpoint
+checkpoint: ???
+architecture: resnet18
+provenance: null

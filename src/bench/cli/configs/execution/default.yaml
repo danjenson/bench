@@ -1,0 +1,5 @@
+device: cuda
+batch_size: 64
+workers: 8
+work_dir: null
+numerics: bf16-v1

@@ -1,0 +1,35 @@
+[project]
+name = "bench"
+version = "0.1.0"
+description = "Reproducible frozen visual representation benchmarks"
+readme = "README.md"
+authors = [
+    { name = "Daniel Jenson", email = "daniel.a.jenson@gmail.com" }
+]
+requires-python = ">=3.13"
+dependencies = [
+    "torch>=2.7",
+    "torchvision>=0.22",
+    "numpy>=2.2",
+    "pillow>=11.1",
+    "hydra-core>=1.3.2",
+    "safetensors>=0.8",
+]
+
+[project.scripts]
+bench = "bench.cli.main:main"
+
+[dependency-groups]
+dev = ["pytest>=9.1.1"]
+
+[project.optional-dependencies]
+dinov3 = ["transformers>=4.56"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra -m 'not gpu'"
+markers = ["gpu: explicit CUDA integration acceptance"]
+
+[build-system]
+requires = ["uv_build>=0.13.1,<0.14.0"]
+build-backend = "uv_build"

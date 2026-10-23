@@ -1,0 +1,4 @@
+_target_: bench.adapters.torchvision.TorchvisionAdapter.from_checkpoint
+checkpoint: ???
+architecture: vit_b_16
+provenance: null

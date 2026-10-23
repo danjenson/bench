@@ -1,0 +1,3 @@
+_target_: bench.adapters.dinov3.DinoV3Adapter
+checkpoint: ???
+provenance: null

@@ -1,0 +1,141 @@
+# Candidate protocols, not calibrated or released v1 recipes.
+common:
+  release_status: candidate
+  preparation_revision: bench-preparation-1
+  split_seed: 0
+  development_fraction: 0.1
+  split_rule: sha256-of-seed-and-source-id-order
+  image_interpolation: pillow-bicubic
+  label_interpolation: nearest
+  align_corners: false
+  spatial_border: replicate-within-declared-extent
+  numerics: [bf16-v1, fp32-v1]
+  numerical_tolerance: {absolute_percentage_points: 0.1}
+  numerical_rules: {probe_dtype: float32, reduction_dtype: float32, tf32: false, feature_storage: preserve-output-dtype}
+  standardization: {weighting: valid-locations, variance_floor: 1.0e-6, reduction: fp32, partition: train}
+  diagnostics: {maximum_images: 64, selection: ordered-training-prefix, rank: entropy-of-normalized-singular-values, cosine: all-distinct-pairs, variation: root-mean-channel-population-variance}
+probe_defaults:
+  betas: [0.9, 0.999]
+  epsilon: 1.0e-8
+  amsgrad: false
+  foreach: false
+  fused: false
+  weight_decay_parameters: weight-and-bias
+  initialization: weight-uniform-plus-minus-inverse-sqrt-width-bias-zero
+  loss: unweighted-cross-entropy-no-label-smoothing
+  warmup_rounding: nearest-integer-ties-even-minimum-one-update
+  statistics_variance: population
+classification:
+  method: global
+  canvas: 224
+  classes: null
+  metric: accuracy
+  metric_unit: percent
+  probe:
+    optimizer: adamw
+    learning_rates: [0.001, 0.003, 0.01]
+    weight_decays: [0.0, 0.1]
+    epochs: 50
+    batch_size: 1024
+    seeds: [0, 1, 2]
+    search_seed: 0
+    warmup_fraction: 0.1
+    final_lr_fraction: 0.001
+    selection: best-development-score-then-earlier-epoch-then-candidate-order
+    shuffle: private-torch-generator-per-seed
+    partial_batch: keep
+    scoring: each-epoch
+segmentation:
+  method: spatial
+  canvas: 512
+  transform: fit-pad
+  metric: miou
+  metric_unit: percent
+  ignore_label: 255
+  metric_aggregation: dataset-confusion-matrix-ignore-absent-classes
+  probe:
+    optimizer: adamw
+    learning_rates: [0.0001, 0.0003, 0.001]
+    weight_decays: [0.01]
+    epochs: 40
+    batch_size: 16
+    seeds: [0, 1, 2]
+    search_seed: 0
+    warmup_fraction: 0.1
+    final_lr_fraction: 0.001
+    selection: best-development-score-then-earlier-epoch-then-candidate-order
+    shuffle: private-torch-generator-per-seed
+    partial_batch: keep
+    scoring: each-epoch
+correspondence:
+  method: spatial
+  canvas: 448
+  transform: fit-pad
+  metric: pck_at_0.1
+  metric_unit: percent
+  threshold: 0.1
+  threshold_comparison: less-than-or-equal
+  threshold_extent: max-target-box-side-original-pixels
+  annotation_validation: finite-positive-area-target-box
+  matching: bilinear-source-then-l2-normalize-cosine-native-target-centers
+  ties: raster-order
+  eligibility: finite-paired-keypoints-inside-both-original-images
+  metric_aggregation: pooled-eligible-correspondences
+tasks:
+  imagenet-100:
+    id: imagenet100-linear-v1
+    source: imagenet
+    kind: classification
+    classes: 100
+    transform: resize-center-crop
+    resize_short: 256
+    metric: top1
+    class_list: imagenet100.txt
+    class_list_sha256: 79f3f1552ccc478ce24bd934b4573625db584ddc1f4643ae23c994a94cb11397
+    reference: HobbitLong/CMC@7b227be0b10ef4e526c72af07664f5079ed9ee09/imagenet100.txt
+    bank: {train_per_class: 100, development_per_class: 25, final_per_class: 50}
+    probe: {optimizer: adamw, learning_rates: [0.003], weight_decays: [0.0], updates: 100, batch_size: 1024, seeds: [0], warmup_fraction: 0.1, final_lr_fraction: 0.001, selection: final-update, shuffle: private-torch-generator-per-seed, partial_batch: keep, scoring: final-update}
+  imagenet-1k:
+    id: imagenet1k-linear-v1
+    source: imagenet
+    kind: classification
+    classes: 1000
+    transform: resize-center-crop
+    resize_short: 256
+    metric: top1
+  pascal:
+    id: voc2012-linear-v1
+    source: voc2012
+    kind: segmentation
+    classes: 21
+    bank: {train: 1024, development: 256, final: 1449}
+    probe: {optimizer: adamw, learning_rates: [0.001], weight_decays: [0.01], updates: 100, batch_size: 16, seeds: [0], warmup_fraction: 0.1, final_lr_fraction: 0.001, selection: final-update, shuffle: private-torch-generator-per-seed, partial_batch: keep, scoring: final-update}
+  ade20k:
+    id: ade20k-linear-v1
+    source: ade20k
+    kind: segmentation
+    classes: 150
+    label_rule: source-0-ignore-source-1-through-150-minus-one
+  spair71k:
+    id: spair71k-match-v1
+    source: spair71k
+    kind: correspondence
+    reference: mbanani/probe3d@a1f14640076e38b8bc07b66d0fe2d01d15691e9d/evaluate_spair_correspondence.py
+    diagnostics: {maximum_images: 64, selection: sorted-distinct-training-image-prefix, rank: entropy-of-normalized-singular-values, cosine: all-distinct-pairs, variation: root-mean-channel-population-variance}
+  clevr-count:
+    id: clevr-count-v1
+    source: clevr
+    kind: classification
+    transform: fit-pad
+    classes: 8
+    label_rule: number-of-scene-objects-minus-three
+    reference: facebookresearch/vissl@09270ed25a6c2cf71263d955b64cbe076d34ac45/extra_scripts/datasets/create_clevr_count_data_files.py
+  clevr-distance:
+    id: clevr-distance-v1
+    source: clevr
+    kind: classification
+    transform: fit-pad
+    classes: 6
+    distance_thresholds: [8.0, 8.5, 9.0, 9.5, 10.0, 100.0]
+    label_rule: bisect-left-thresholds-minimum-object-pixel-coords-z
+    reference: facebookresearch/vissl@09270ed25a6c2cf71263d955b64cbe076d34ac45/extra_scripts/datasets/create_clevr_dist_data_files.py

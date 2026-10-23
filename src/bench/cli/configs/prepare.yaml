@@ -1,0 +1,8 @@
+names: ???
+data_root: ~/datasets
+datasets:
+  imagenet: null
+  voc2012: null
+  ade20k: null
+  clevr: null
+  spair71k: null

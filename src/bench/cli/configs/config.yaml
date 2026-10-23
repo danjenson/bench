@@ -1,0 +1,7 @@
+defaults:
+  - prepare
+  - model: dinov3
+  - execution: default
+  - _self_
+evaluation: development
+output_dir: ???

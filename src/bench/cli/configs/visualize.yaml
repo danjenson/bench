@@ -1,0 +1,4 @@
+defaults:
+  - prepare
+  - _self_
+output_dir: outputs/bench/visualizations
