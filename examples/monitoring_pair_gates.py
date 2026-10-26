@@ -14,11 +14,11 @@ def summarize(pairs, *, delta, minimum_qualifying_pairs):
     if not math.isfinite(delta) or delta <= 0:
         raise ValueError("The detectable change must be positive and finite")
     if minimum_qualifying_pairs is not None and (type(minimum_qualifying_pairs) is not int or minimum_qualifying_pairs < 3):
-        raise ValueError("Predeclare at least three qualifying pairs spanning CNN, ViT and glimpse families")
+        raise ValueError("Predeclare at least three qualifying pairs spanning supported CNN and ViT families")
     rows, identities = [], set()
     for pair in pairs:
         identity = (pair["family"], frozenset((pair["first"], pair["second"])))
-        if pair["family"] not in ("cnn", "vit", "glimpse") or pair["first"] == pair["second"] or identity in identities:
+        if pair["family"] not in ("cnn", "vit") or pair["first"] == pair["second"] or identity in identities:
             raise ValueError("Each pair must have distinct checkpoints and a unique supported family/pair identity")
         identities.add(identity)
         row = {key: pair[key] for key in ("family", "first", "second")}
@@ -47,7 +47,7 @@ def summarize(pairs, *, delta, minimum_qualifying_pairs):
     missing_agreement = sum(row["agreement_passed"] is None for row in qualifying)
     reversals = sum(row["supported_reversal"] is True for row in qualifying)
     missing_doubled = sum(row["supported_reversal"] is None for row in qualifying)
-    enough = minimum_qualifying_pairs is not None and len(qualifying) >= minimum_qualifying_pairs and families == ["cnn", "glimpse", "vit"]
+    enough = minimum_qualifying_pairs is not None and len(qualifying) >= minimum_qualifying_pairs and families == ["cnn", "vit"]
     complete = bool(rows) and not missing_reference and enough
     return {
         "delta_percentage_points": delta,

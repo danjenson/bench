@@ -12,7 +12,7 @@ def pair(family, index, *, change=3, interval=(2.5, 3.5)):
 
 def test_monitoring_agreement_threshold_preserves_reversals_and_each_pair():
     summarize = runpy.run_path(str(Path(__file__).parents[1] / "examples/monitoring_pair_gates.py"))["summarize"]
-    pairs = [pair(("cnn", "vit", "glimpse")[index % 3], index) for index in range(10)]
+    pairs = [pair(("cnn", "vit")[index % 2], index) for index in range(10)]
     pairs[-1]["monitoring"] = {"difference_percentage_points": -3, "paired_95_interval": [-3.5, -2.5]}
     report = summarize(pairs, delta=2, minimum_qualifying_pairs=10)
     assert report["agreement"]["status"] == "passed"
@@ -28,9 +28,9 @@ def test_monitoring_agreement_threshold_preserves_reversals_and_each_pair():
 
 def test_missing_or_unqualified_pairs_cannot_establish_sensitivity():
     summarize = runpy.run_path(str(Path(__file__).parents[1] / "examples/monitoring_pair_gates.py"))["summarize"]
-    pairs = [pair(family, index) for index, family in enumerate(("cnn", "vit", "glimpse"))]
+    pairs = [pair(family, index) for index, family in enumerate(("cnn", "vit", "cnn"))]
     assert summarize(pairs, delta=2, minimum_qualifying_pairs=3)["agreement"]["status"] == "passed"
-    negative = [pair(family, index, change=-3, interval=(-3.5, -2.5)) for index, family in enumerate(("cnn", "vit", "glimpse"))]
+    negative = [pair(family, index, change=-3, interval=(-3.5, -2.5)) for index, family in enumerate(("cnn", "vit", "cnn"))]
     assert summarize(negative, delta=2, minimum_qualifying_pairs=3)["agreement"]["status"] == "passed"
     for missing in ("monitoring", "reference", "doubled"):
         incomplete = deepcopy(pairs)
@@ -55,7 +55,7 @@ def test_missing_or_unqualified_pairs_cannot_establish_sensitivity():
 
 def test_precision_is_per_pair_and_zero_is_not_a_supported_direction():
     summarize = runpy.run_path(str(Path(__file__).parents[1] / "examples/monitoring_pair_gates.py"))["summarize"]
-    pairs = [pair(family, index) for index, family in enumerate(("cnn", "vit", "glimpse"))]
+    pairs = [pair(family, index) for index, family in enumerate(("cnn", "vit", "cnn"))]
     pairs[0]["monitoring"] = {"difference_percentage_points": 1, "paired_95_interval": [0, 2]}
     report = summarize(pairs, delta=2, minimum_qualifying_pairs=3)
     assert report["precision"]["status"] == "passed"
@@ -71,3 +71,15 @@ def test_precision_is_per_pair_and_zero_is_not_a_supported_direction():
     reverse = {**pairs[0], "first": pairs[0]["second"], "second": pairs[0]["first"]}
     with pytest.raises(ValueError, match="unique"):
         summarize(pairs + [reverse], delta=2, minimum_qualifying_pairs=3)
+
+
+def test_supported_reference_families_are_required_without_lowering_pair_minimum():
+    summarize = runpy.run_path(str(Path(__file__).parents[1] / "examples/monitoring_pair_gates.py"))["summarize"]
+    single_family = [pair("cnn", index) for index in range(3)]
+    report = summarize(single_family, delta=2, minimum_qualifying_pairs=3)
+    assert report["agreement"]["status"] == "pending"
+    assert not report["agreement"]["sufficient_qualifying_set"]
+    with pytest.raises(ValueError, match="at least three"):
+        summarize([pair("cnn", 0), pair("vit", 1)], delta=2, minimum_qualifying_pairs=2)
+    with pytest.raises(ValueError, match="supported family"):
+        summarize([pair("prototype", 0)], delta=2, minimum_qualifying_pairs=3)

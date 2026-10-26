@@ -1,0 +1,31 @@
+{
+  "schema_version": "1.0",
+  "scope_revision": "public-reference-models-20261024",
+  "policy": "Established public checkpoint or model release, documented upstream loading/preprocessing and evaluation/tests; local adapter qualification recorded separately.",
+  "pretrained_references": [
+    {
+      "architecture": "resnet18",
+      "publisher": "torchvision",
+      "weights": "ResNet18_Weights.IMAGENET1K_V1",
+      "url": "https://download.pytorch.org/models/resnet18-f37072fd.pth",
+      "sha256": "f37072fd47e89c5e827621c5baffa7500819f7896bbacec160b1a16c560e07ec",
+      "upstream_validation": "https://docs.pytorch.org/vision/2.0/models/generated/torchvision.models.resnet18.html",
+      "qualification": "Existing real-data checks; full release calibration remains pending."
+    },
+    {
+      "architecture": "vit_b_16",
+      "publisher": "torchvision",
+      "weights": "ViT_B_16_Weights.IMAGENET1K_V1",
+      "url": "https://download.pytorch.org/models/vit_b_16-c867db91.pth",
+      "sha256": "c867db91d3e12c6cbadabb610d73c24a546bf82d8c03a9fea34f43a712ddb0e9",
+      "upstream_validation": "https://docs.pytorch.org/vision/2.0/models.html",
+      "qualification": "Existing real-data checks; full release calibration remains pending."
+    }
+  ],
+  "additional_adapter": {
+    "architecture": "dinov3",
+    "publisher": "Meta / facebookresearch",
+    "upstream_release": "https://github.com/facebookresearch/dinov3#pretrained-models",
+    "qualification": "Exact official artifact and local real-data qualification pending; no reference checkpoint selected by this manifest."
+  }
+}
