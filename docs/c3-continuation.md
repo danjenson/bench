@@ -1,4 +1,11 @@
-# c3 acceptance continuation
+# c3 acceptance continuation (historical)
+
+**October 26: continuation moved to r2.** The ResNet18 extension completed at
+22:43 UTC on October 25, passed independent verification and pruned. Both models'
+upper-rate boundaries are resolved. Source waiting jobs 56–59 have been archived
+and removed; the c3 group is paused. The current source execution registry points
+to the r2 successor. Read [r2-handoff.md](r2-handoff.md) before taking action.
+The remaining text is the preserved October 25 milestone snapshot.
 
 The active scope is `public-reference-models-20261024`, defined by
 [reference-models.md](reference-models.md). Current benchmark references are the
@@ -23,7 +30,7 @@ handoff, as requested; the next agent owns subsequent acceptance work. Keep
 ImageNet transfer 56 stashed until its complete scientific and cleanup gate
 passes. This milestone is not full SPEC acceptance.
 
-## Live continuation
+## Queue snapshot at the October 25 handoff
 
 The current serial queue, checked at 17:42 UTC on October 25, is:
 

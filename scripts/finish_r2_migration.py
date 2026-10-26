@@ -48,6 +48,17 @@ def emit(stage, **kwargs):
 
 
 def main():
+    # The bootstrap is a separate live SSH job; do not touch its incomplete data.
+    while True:
+        if (MIGRATION / "bootstrap-failure.json").exists():
+            raise RuntimeError("Bootstrap failed: " + str(read(MIGRATION / "bootstrap-failure.json")))
+        if (MIGRATION / "source-audit.json").exists():
+            progress = read(MIGRATION / "source-audit.json")
+            if progress["status"] == "complete":
+                break
+            assert progress["status"] != "failed", "Source audit has failures; inspect before proceeding"
+        emit("waiting-for-source-copy-and-audit", copied=(MIGRATION / "copy-receipt.json").exists())
+        time.sleep(30)
     request = read(MIGRATION / "request.json")
     sources = read(MIGRATION / "source-audit.json")
     assert sources["status"] == "complete" and sources["request_sha256"] == sha(MIGRATION / "request.json")
@@ -64,6 +75,18 @@ def main():
     origin_core, original = transfer["checked"](transfer_request)
     runtime = transfer["runtime_check"](origin_core, original)
     assert runtime["binary_sha256"] == read(ROOT / "outputs/environments/setup-receipt.json")["environments"]["bench"]["python_binary_sha256"]
+    gpu_probe = """import json,torch
+assert torch.cuda.is_available() and torch.cuda.get_device_capability()==(8,9)
+assert torch.cuda.is_bf16_supported()
+for dtype in (torch.float32,torch.bfloat16):
+ a=torch.ones((32,32),device='cuda',dtype=dtype)
+ assert torch.all(a@a==32).item()
+torch.cuda.synchronize()
+p=torch.cuda.get_device_properties(0)
+print(json.dumps({'status':'passed','device':p.name,'capability':list(torch.cuda.get_device_capability()),'total_memory':p.total_memory,'fp32_and_bf16_matrix_smoke':True,'scope':'CUDA runtime smoke only, not numerical-profile or performance qualification.'}))
+"""
+    gpu_runtime = origin_core["probe"]([original["jobs"][0]["command"][0], "-c", gpu_probe], origin_core["environment"](original["jobs"][0]))
+    save(RUN / "gpu-runtime-probe.json", gpu_runtime)
     origin_queue = read(MIGRATION / "origin-queue.json")
     assert origin_queue["origin_host"] == request["origin_host"]
     boundary = transfer["combined_boundary"](transfer_request, origin_queue)
@@ -132,6 +155,10 @@ def main():
             assert actual == (core_hash if path == runner else expected), name
             pins[name] = actual
         plan["pinned_files"] = pins
+        for evidence in (MIGRATION / "source-audit.json", MIGRATION / "origin-queue.json",
+                         RUN / "origin-dense-verification.json", RUN / "imagenet-source-audit/receipt.json",
+                         RUN / "gpu-runtime-probe.json"):
+            plan["pinned_files"][str(evidence)] = sha(evidence)
         for job in plan["jobs"]:
             assert not Path(job["output"]).exists()
             assert not Path(job["log"]).exists()
@@ -160,7 +187,9 @@ def main():
     config.write_text("shared:\n  pueue_directory: " + str(state_dir) + "\n  runtime_directory: " + str(runtime_dir)
                       + "\n  unix_socket_path: " + str(runtime_dir / "pueue.socket")
                       + "\n  pid_path: " + str(runtime_dir / "pueued.pid") + "\n  use_unix_socket: true\n")
-    subprocess.run(["pueued", "-c", str(config), "-d"], check=True)
+    with (config.parent / "daemon.log").open("a") as log:
+        subprocess.run(["pueued", "-c", str(config), "-d"], check=True,
+                       stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT)
     base = ["pueue", "-c", str(config)]
     for _ in range(20):
         ready = subprocess.run([*base, "status", "--json"], capture_output=True, text=True)

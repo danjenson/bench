@@ -1,4 +1,14 @@
-# c3 benchmark acceptance handoff
+# c3 benchmark acceptance handoff (historical)
+
+**October 26 update: the remaining workload has moved to r2.** Read
+[r2-handoff.md](r2-handoff.md) for the current execution root, verified data and
+environment, private paused scheduler, and resume command. All fourteen planned
+ADE fits completed and verified; original workspaces are pruned. r2's existing
+ImageNet matched all 1,281,167 training/development checksums, so the old missing
+ImageNet transfer is unnecessary there. Source waiting tasks 56–59 are archived
+and removed; completed c3 jobs/results remain intact. Evaluations stay paused.
+
+The text below records the October 25 handoff snapshot, not the current queue.
 
 The current supported reference-model scope was revised on October 24, 2026 by
 the user: established publicly released and well-tested checkpoint/model files

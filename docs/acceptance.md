@@ -14,13 +14,15 @@ requirements. Completed historical results remain preserved; exclusion is a
 scope change and does not establish a passing measurement. The previous full
 ledger is retained as [historical evidence](../outputs/c3-acceptance-20261023/public-reference-scope-20261024/previous-worktree/docs/acceptance.md).
 
-The current c3 queue has completed initial ADE diagnostics/reverification (37/54),
-running ResNet18 extension 55, held ImageNet transfer 56, and queued public
-ImageNet/SPair/CLEVR evaluations 57–59. Plans
-were derived and CPU contracts revalidated before enqueueing. Their exact launch
-and scientific-input audit are in the current scope directory. Its
-`current-execution.json` points to the current family-plan metadata revision 2,
-which removes stale study inventories while preserving the scientific jobs.
+As of October 26, the remaining evaluations are staged on r2 with fresh plans,
+outputs and a private paused queue: full ImageNet ViT (0), full SPair controls
+(1), and ViT CLEVR joint calibration (2). All fourteen planned ADE fits are
+complete and verified. r2's existing ImageNet matched all 1,281,167 pinned
+training/development image checksums; no missing-image transfer is needed there.
+All 1,454,193 required source files passed checksums. Environment, CPU model/
+readout contracts and full data preflights pass on r2, with fresh reconstruction
+of all 28,294 ADE records. The old c3 waiting tasks are archived and removed.
+The broader acceptance goal stays paused. Read [r2-handoff.md](r2-handoff.md).
 
 ## Core correctness and operation
 
@@ -65,80 +67,50 @@ score, end-to-end timing or universal profile qualification. Receipt:
 | Task | Official pretrained references | Remaining work |
 | --- | --- | --- |
 | ImageNet-100 and VOC monitoring | ResNet18 and ViT-B/16 real-data scores, repeatability and numerical comparisons exist. | Resolve probe-budget and precision adequacy before advertising calibrated monitoring or a cadence. |
-| Full ImageNet-1K | ResNet18 control and wider development searches are verified. | Transfer missing training/development source images after dense diagnostics clean up; run and verify ViT-B/16. |
-| ADE20K | Both official pretrained controls and all twelve initial LR/budget diagnostics are independently verified. ViT's upper-rate boundary is resolved. | Finish and verify the ResNet18 extension, resolve any remaining search edge, and prune before the ImageNet copy. |
+| Full ImageNet-1K | ResNet18 control and wider development searches are verified; all source images are checksum-verified on r2. | Run and verify the staged ViT-B/16 evaluation. |
+| ADE20K | Both official pretrained controls and all fourteen planned LR/budget diagnostics are independently verified and pruned; both upper-rate boundaries are resolved. | Broader recipe/scale/budget qualification remains; no additional ADE fit is currently queued. |
 | CLEVR count and distance | Both official pretrained reference architectures have verified full development results. | Complete retained ViT joint LR/WD and budget calibration; CNN expanded searches already provide evidence. |
 | SPair-71k | Source preparation, geometry/reference kernel checks and independent verifier fixtures exist. | Run and independently verify both official pretrained references on the full development partition. |
 
-All six pretrained ResNet18 ADE LR/budget diagnostics completed at 08:36 UTC on
-October 25. Their independent verification reconstructs 12,126 records against
-4,043 source files and 373,568,791 eligible development pixels. The native-rate
-40-epoch seed-zero score differs from the original baseline by about -0.00000217
-points against the unchanged 0.1-point tolerance. Its 161 changed canvas
-prediction hashes establish score parity rather than bitwise identity. Actual
-workspace deletion and zero retained temporary bytes are confirmed.
+All fourteen planned pretrained ADE LR/budget diagnostics are complete,
+independently verified and pruned. Initial ResNet18 and ViT-B/16 runs contribute
+24,252 records, and the ResNet18 LR 0.03 extension contributes 4,042. Both models'
+source counts reconcile against 4,043 files and 373,568,791 eligible development
+pixels. All temporary workspaces are absent and retained temporary bytes are zero.
 
-The best 40-epoch rate is 0.003 (17.506731404189928 mIoU), but the best 80-epoch
-rate is the largest tested, 0.01 (17.493675269088396). The latter requires a wider
-development search; completion of these fits does not pass search coverage.
-ViT-B/16's six diagnostics are now complete and independently verified too.
-ImageNet transfer stays held until the ResNet18 search edge is resolved and the
-extension's actual cleanup is verified.
-Evidence: `ade-search/results/resnet18-pretrained/verification.json` under the
-current scope directory; the earlier native-only receipt remains preserved.
+ResNet18 selects LR 0.003 at 40 epochs (17.506731404189928 mIoU) and LR 0.01 at
+80 epochs (17.493675269088396). Testing LR 0.03 scored 17.424993430556192 and
+17.47618981145191 respectively, resolving its upper-rate boundary. The extension
+finished at 22:43:18 UTC on October 25; its verification SHA256 is
+`dd0392fcd01b4145a45a494ecbf05f876c0ed9f27cee06a51e6964a948d40158` at
+`ade-extensions/resnet18-lr0p03/results/resnet18-pretrained/verification.json`
+under the original public-reference scope directory.
 
-The ResNet18 extension is running as task 55 after successful independent
-verification task 54. It adds two
-fits at LR 0.03 and the existing 40/80-epoch budgets, reusing the six completed
-results as independently reconstructed evidence. All package files and model,
-data, recipe, execution and tolerance contracts remain unchanged. Its full CPU
-model/environment/data checks pass. The transfer/ADE/recovery guards pass 34
-focused tests. Measured prior fitting
-times estimate about five additional GPU hours, plus setup and verification.
-ViT's native-rate 40/80-epoch pair now passes independent reconstruction of all
-4,042 records and 71 request pins. The scores are 30.020188985261655 and
-30.04456958203907 mIoU, a doubled-budget difference of 0.024380596777415775
-points. Selected epochs are 34 and 54. The first score matches baseline seed
-zero exactly; the different budgets change all 2,021 prediction hashes. Receipt:
-`ade-search/budget-checks/vit_b_16-pretrained/native-rate/verification.json`.
-
-All six ViT variants are independently reconstructed: LR 0.003 scores
-29.87683680759634/29.917411593712593 at 40/80 epochs; LR 0.01 scores
-29.73027292606625/29.852875771449316. Both budgets select the native LR 0.001,
-below the tested upper rate. Its 12,126 records, source-label counts and all
-statistics hashes reconcile. The verification SHA256 is
+ViT selects LR 0.001 at both budgets (30.020188985261655 and
+30.04456958203907 mIoU), below the tested upper rate. Native-rate selected epochs
+are 34/54. Its verification SHA256 is
 `c20572c680999ed1e253a760f421aeb983b4c9c23f483eaf7c86f1dab616ed6a` at
-`ade-search/results/vit_b_16-pretrained/verification.json`. Its actual workspace
-is absent and retained temporary bytes are zero. Different-LR comparisons are
-optimizer experiments, not numerical-profile parity tests. No full-probe
-convergence threshold or full release acceptance follows from these diagnostics.
+`ade-search/results/vit_b_16-pretrained/verification.json`. ResNet18's native
+40-epoch score differs from its original baseline by -0.00000217 points; ViT's
+matches exactly. The unchanged registered tolerance is 0.1 points.
 
-Original task 37 ended Failed(1) at 17:38:11 UTC after all twelve fits completed
-and pruned: its frozen checker compared aggregate dictionaries by exact float
-equality and rejected a 7.1e-15 discrepancy. Task 54 succeeded at 17:38:57 UTC,
-independently reconstructing all 24,252 records with the existing 1e-10
-metric-coherence bound and unchanged 0.1-point score tolerance. Original raw
-state and failure remain preserved; no fit was restarted. The separate
-`ade-search/recovery-verification/effective-state.json` has SHA256
-`1a5061fc9bf372dde4001de572e27ea397fbd50351d8909f15bbe2d810fb71c3` and
-truthfully retains `needs-search-extension` for ResNet18 alone. Its stale raw
-per-model running row does not identify a live original worker.
+Original task 37's Failed(1) outcome remains preserved: after fitting and cleanup,
+its frozen checker rejected a 7.1e-15 exact-float dictionary discrepancy. Recovery
+54 independently checked all twelve original fits using the existing 1e-10
+metric-coherence bound, without refitting. Its separate effective state and
+original raw-state archive remain unchanged. Extension 55 subsequently succeeded.
+The earlier handoff milestone remains historical evidence; no completed fit was
+restarted during the migration.
 
-Task 55 started at 17:38:57 UTC, passed CPU preflight and has active GPU
-calibration. The requested intermediate milestone is reached; the handoff audit
-at `handoff-20261025/manifest.json` checks all twelve statistics files, preserved
-state, exact queue identities, live extension and held copy, and 71/134/137/148
-static pins. Both original workspaces are absent; preserve the extension's
-active workspace. Full acceptance remains open for the next agent. The current
-transfer remains stashed, with no image copy started.
-
-The current ImageNet copy is held task 56, with an independently checked combined
-boundary for the initial public diagnostics and incremental search. Its 148
-static input pins and verified runtime pass configuration validation; the live
-dense results and cleanup remain required. Tasks 57–59 use the unchanged
-metadata-v2 family plans. Their source/checkpoint pins, prior CPU contracts and
-fresh outputs were rechecked before queue rebinding. Superseded tasks were
-removed unstarted, and their exact identities and frozen requests are preserved.
+On r2, `outputs/r2-acceptance-20261026/origin-dense-verification.json` records fresh
+reconstruction of all 28,294 records and the combined resolved search/cleanup
+boundary. `outputs/r2-migration-20261026/source-audit.json` verifies all required
+train/development source bytes. Three relocated family plans pass CPU model,
+environment and complete data preflight. The private r2 queue remains paused;
+the source c3 waiting tasks were archived and removed. GPU runtime smoke passes,
+but new hardware supplies no borrowed timing or universal numerical-parity claim.
+The remaining probe-scale/budget, monitoring and release requirements below are
+still open; these development diagnostics alone do not establish full acceptance.
 
 The retained monitoring numerical evidence has been reconstructed under the
 current analysis code and reconciled against the public checkpoint manifest.
@@ -160,12 +132,10 @@ universal numerical equivalence.
 
 ## Remaining release requirements
 
-The requested intermediate handoff milestone is reached: the twelve initial
-ADE fits are independently verified and the two-fit ResNet18 extension is
-running. The handoff and cleanup checks are recorded above. The remaining
-requirements below stay open for the next agent; ImageNet transfer stays held
-until the complete ADE science/cleanup boundary passes. See
-[c3-continuation.md](c3-continuation.md) for the exact stopping conditions.
+The requested October 25 handoff milestone was reached, and the October 26
+workload migration is staged and validated on r2. Evaluations and the broader
+acceptance goal remain paused. The following requirements stay open. Read
+[r2-handoff.md](r2-handoff.md) for the current queue and resume instructions.
 
 1. Finish the retained full-task controls and development calibration, including
    search coverage, feature-scale sensitivity and adequate probe budgets. Resolve
@@ -202,4 +172,4 @@ and matched training-overhead evidence remain outstanding.
 
 The package remains a 0.1 development implementation. No stable-v1 release or
 completion claim follows from this scope revision. Current execution details
-are in [c3-continuation.md](c3-continuation.md).
+are in [r2-handoff.md](r2-handoff.md).
