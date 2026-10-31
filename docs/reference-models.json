@@ -10,7 +10,7 @@
       "url": "https://download.pytorch.org/models/resnet18-f37072fd.pth",
       "sha256": "f37072fd47e89c5e827621c5baffa7500819f7896bbacec160b1a16c560e07ec",
       "upstream_validation": "https://docs.pytorch.org/vision/2.0/models/generated/torchvision.models.resnet18.html",
-      "qualification": "Existing real-data checks; full release calibration remains pending."
+      "qualification": "Seven released development references; calibration, reporting and exact local source/protocol bindings verified for package1.0.0. See docs/acceptance.md."
     },
     {
       "architecture": "vit_b_16",
@@ -19,7 +19,7 @@
       "url": "https://download.pytorch.org/models/vit_b_16-c867db91.pth",
       "sha256": "c867db91d3e12c6cbadabb610d73c24a546bf82d8c03a9fea34f43a712ddb0e9",
       "upstream_validation": "https://docs.pytorch.org/vision/2.0/models.html",
-      "qualification": "Existing real-data checks; full release calibration remains pending."
+      "qualification": "Seven released development references; calibration, reporting and exact local source/protocol bindings verified for package1.0.0. See docs/acceptance.md."
     }
   ],
   "additional_adapter": {

@@ -1,6 +1,6 @@
 [project]
 name = "bench"
-version = "0.1.0"
+version = "1.0.0"
 description = "Reproducible frozen visual representation benchmarks"
 readme = "README.md"
 authors = [
@@ -33,3 +33,6 @@ markers = ["gpu: explicit CUDA integration acceptance"]
 [build-system]
 requires = ["uv_build>=0.13.1,<0.14.0"]
 build-backend = "uv_build"
+
+[tool.uv.build-backend]
+source-include = ["uv.lock", "SPEC.md", "docs/**", "examples/**/*.py", "scripts/*.py", "tests/*.py"]

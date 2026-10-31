@@ -1,6 +1,6 @@
 # Minimal vision benchmark package specification
 
-Status: proposed implementation contract. The Python examples describe the intended package, not functionality already implemented. Target repository: `bench`.
+Status: v1 interface and protocol contract. [The API contract](docs/api.md) records the supported Python surface. [Acceptance](docs/acceptance.md) records measured evidence, numerical restrictions and the scope of runtime claims. Package, task and result-schema versions remain independent.
 
 ## Purpose and scope
 
@@ -64,7 +64,7 @@ print(result.metrics)
 
 `EncoderAdapter` above belongs to the model's repository. `bench` must not require importing its training loop, optimizer, or experiment tracker to evaluate it.
 
-Proposed runner signature:
+Runner signature:
 
 ```python
 def run(
@@ -83,7 +83,7 @@ def run(
 
 `evaluation="development"` fits probes on training data and reports monitoring scores on development data. It never reads the final partition. `evaluation="final"` applies the same selected benchmark recipes to their held-out partitions after any probe selection on development data. Every result identifies its evaluation partition. Evaluation partition and benchmark selection are independent choices.
 
-`Execution` has the fields `device`, `batch_size`, `workers`, `work_dir`, and `numerics`. Their defaults are CUDA, 64 extraction samples, 8 workers, no shared workspace, and `bf16-v1`. With `work_dir=None`, use `output_dir/.work` and remove it on successful completion. An explicit `work_dir` is a temporary training workspace shared across evaluations, with the bounded lifetime defined below. It is not a persistent feature-cache directory. Verified interrupted work resumes automatically; there is no resume toggle. The alternative `fp32-v1` numerical profile is explicit and recorded separately. `RunResult.metrics` is `dict[str, dict[str, float]]`; richer metric metadata belongs in the versioned result artifact.
+`Execution` has the fields `device`, `batch_size`, `workers`, `work_dir`, and `numerics`. Their defaults are CUDA, 64 extraction samples, 8 workers, no shared workspace, and `fp32-v1`. The October 28 calibration-driven default revision follows seven failing classification BF16 parity comparisons; it does not qualify BF16 for those cases. With `work_dir=None`, use `output_dir/.work` and remove it on successful completion. An explicit `work_dir` is a temporary training workspace shared across evaluations, with the bounded lifetime defined below. It is not a persistent feature-cache directory. Verified interrupted work resumes automatically; there is no resume toggle. The alternative `bf16-v1` numerical profile is explicit, recorded separately, and requires qualified model/task parity for reference comparisons. `RunResult.metrics` is `dict[str, dict[str, float]]`; richer metric metadata belongs in the versioned result artifact.
 
 The stable model seam is:
 
@@ -178,7 +178,7 @@ The supported-reference manifest records eligibility and qualification separatel
 
 ### Initial frozen probe recipes
 
-The following are proposed defaults for `imagenet-1k`, `clevr-count`, `clevr-distance`, and `ade20k`, to calibrate before v1 is frozen. Each named benchmark owns its resolved recipe.
+The following define the initial grids and native budgets for `imagenet-1k`, `clevr-count`, `clevr-distance`, and `ade20k`. Each named benchmark owns its resolved recipe. The deterministic coordinate search and selected-setting budget checks below are part of that recipe; this table is not the complete search range.
 
 | Setting | Global classification | Linear segmentation |
 | --- | --- | --- |
@@ -187,12 +187,46 @@ The following are proposed defaults for `imagenet-1k`, `clevr-count`, `clevr-dis
 | Readout | Train-only per-channel standardization, then linear classifier | Train-only per-channel standardization, then a shared linear classifier per location and geometric resampling of logits to the label canvas |
 | Loss | Unweighted cross-entropy, mean over examples in the effective batch | Unweighted cross-entropy, sum over valid pixels divided by their count in the effective batch |
 | Optimizer | AdamW | AdamW |
-| Learning-rate candidates | 0.001, 0.003, 0.01 | 0.0001, 0.0003, 0.001 |
-| Weight-decay candidates | 0, 0.1 | 0.01 |
-| Training budget | 50 epochs, probe batch 1024 | 40 epochs, probe batch 16 |
+| Initial learning-rate grid | 0.001, 0.003, 0.01 | 0.0001, 0.0003, 0.001 |
+| Initial weight-decay grid | 0, 0.1 | 0.01 |
+| Native epoch budget | 50 epochs, probe batch 1024 | 40 epochs, probe batch 16 |
 | Schedule | 10% linear warmup, cosine decay to 0.001 times peak LR | Same |
 | Probe seeds | 0, 1, 2 | 0, 1, 2 |
 | Selection metric | Development top-1 | Development mIoU |
+
+
+The controller first evaluates the declared initial Cartesian grid with seed
+zero at the native epoch budget. It then sweeps observed learning-rate and
+weight-decay coordinates. A winning upper decay extends one declared ladder
+position; a winning learning-rate boundary tests every remaining declared rate
+on that side. Testing the whole extension avoids stopping at a nonmonotone dip.
+Repeat until no candidate is added and the selected candidate is unchanged.
+This is a coordinate search rather than a full Cartesian sweep of both ladders.
+
+| Full task | Learning-rate ladder | Weight-decay ladder |
+| --- | --- | --- |
+| `imagenet-1k` | 1e-05, 3e-05, 0.0001, 0.0003, 0.001, 0.003, 0.01, 0.03, 0.1 | 0, 0.1, 1, 10 |
+| `clevr-count` | 1e-05, 3e-05, 0.0001, 0.0003, 0.001, 0.003, 0.01, 0.03, 0.1, 0.3, 1 | 0, 0.1, 1, 10 |
+| `clevr-distance` | 1e-05, 3e-05, 0.0001, 0.0003, 0.001, 0.003, 0.01, 0.03, 0.1, 0.3, 1 | 0, 0.1, 1, 10 |
+| `ade20k` | 1e-05, 3e-05, 0.0001, 0.0003, 0.001, 0.003, 0.01, 0.03, 0.1, 0.3, 1 | 0.01 |
+
+Only the selected setting receives budget checks. Compare the native budget to
+twice that budget with seed zero; if the absolute development-score difference
+exceeds 0.1 percentage points, continue through the declared multipliers
+1, 2, 4, 8, 16, 32 and 64, retaining every comparison. The first passing adjacent
+pair validates its smaller budget for reporting, regardless of which score is
+higher. Seeds one and two use that same setting and reporting budget without
+another hyperparameter search. Each fit independently selects its best
+development epoch with the prescribed tie breaks. Persist adequacy and boundary
+flags with the selection, including an inadequate final comparison or a winner
+at a declared ladder limit. A boundary flag does not trigger an undeclared
+runtime search beyond the immutable recipe.
+
+Release qualification requires closed search boundaries and an adequate budget
+for the declared pretrained CNN/ViT references and internal weak controls.
+Those results do not assert that every caller-owned representation will have an
+interior optimum or pass the finite budget checks. Caller comparisons retain
+their own selected settings, budgets and flags.
 
 Use standardization statistics from the probe training partition only: over examples for global features and valid feature locations for spatial features. Pin weighting and the variance floor in the task manifest. Use FP32 for losses, statistics, and metric accumulation. Exclude padding and official ignore labels from segmentation loss and mIoU. Preserve full CLEVR scenes in the supplied image: cropping the task input would change counting targets. Recipes with a probe search select the best development checkpoint, breaking ties by earlier epoch then listed candidate order. Keep only the current candidate's best checkpoint and the search winner's checkpoint while searching; delete losing weights as soon as selection permits. Retain compact candidate scores and selection metadata. Do not save auxiliary last checkpoints or optimizer state for completed candidates.
 
@@ -202,20 +236,59 @@ Every learned probe is initialized afresh for each model checkpoint using its pr
 
 `imagenet-100` and `pascal` use fixed optimizer settings and seed 0, scoring the final probe update. Freeze sample counts, resolution, optimizer settings, and update counts in their task manifests. Calibrate sample counts and probe budgets using early, middle, late, and nearby checkpoints from supported public CNN and ViT model releases. Predeclare the checkpoint pairs and reserve checkpoints for acceptance after choosing the recipe. Measure setup, fresh feature extraction, probe fitting, and scoring separately, and report total latency with a new model-state digest and no reusable feature cache, plus contention when sharing a training GPU.
 
-Start calibration with the following proposed acceptance targets. These are design targets, not measured performance claims. Pin reference GPU, CPU, memory, storage, numerical profile, adapter recipe, and evaluation cadence in the calibration manifest; a supported claim applies to that setup.
 
-| Criterion | Measurement and proposed gate |
+The released monitoring settings are fixed: ImageNet-100 uses 100 training,
+75 development and 50 final images per class, a 224 center crop after resizing
+the short side to 256, 400 updates, learning rate 0.03, decay 1.0 and effective
+batch 1024. PASCAL uses 1024 training, 256 development and 1449 final images, a 160
+fit-and-pad canvas, 12800 updates, learning rate 0.1, decay 1.0 and effective batch 16.
+Both use seed zero, final-update scoring and the same FP32 default at every
+checkpoint. Their full optimizer, sampling, preparation and normalization
+settings are recorded in the packaged task manifests. These monitoring scores
+are separate from the full ImageNet-1K and ADE20K tasks.
+
+The following are monitoring acceptance gates. Measured passes retain their exact source, adapter, numerical profile, hardware, data and cadence scope in the acceptance ledger. A gate is not a performance guarantee for an arbitrary adapter or training job. Pin reference GPU, CPU, memory, storage, numerical profile, adapter recipe, and evaluation cadence in the calibration manifest; a supported claim applies to that setup.
+
+| Criterion | Measurement and gate |
 | --- | --- |
 | Feedback latency | The `imagenet-100` plus `pascal` list for one declared adapter recipe finishes within 120 seconds in each of at least three fresh-checkpoint trials, including model loading, hashing, extraction, probes, scoring, and cleanup. Measure end to end in the calling harness or CLI so loading before `bench.run` is counted. Report time to the first task result too. |
 | Training overhead | At the advertised cadence, evaluation adds at most 5% wall time to a fixed training-step interval, measured with and without evaluation under the same allocation. Report separate evaluation GPU time when using another GPU. Results must arrive before the next scheduled evaluation. |
 | Meaningful change | Start with delta = 2 percentage points top-1 for ImageNet-100 and 1 percentage point mIoU for VOC. These specify the changes the monitoring recipe aims to resolve. |
-| Sampling precision | On the predeclared checkpoint pairs, the paired 95% confidence-interval half-width is at most delta / 2. Resample source images, preserving class stratification for ImageNet and recomputing dataset mIoU for VOC; never treat pixels as independent samples. |
+| Sampling uncertainty | Publish each predeclared pair's paired 95% confidence interval and half-width, including nonqualifying pairs and uncertain directions. There is no absolute interval-width acceptance cap. Resample source images, preserving class stratification for ImageNet and recomputing dataset mIoU for VOC; never treat pixels as independent samples. Confident direction detection is required by the agreement gate below. |
 | Agreement with fuller probes | Detect the same direction with a paired interval excluding zero for at least 90% of predeclared pairs whose fuller-reference difference is at least delta and whose reference interval excludes zero. Predeclare at least three qualifying pairs spanning the supported CNN and ViT families, with at least one qualifying pair from each. Report every pair and its intervals, including reversals; an insufficient set of qualifying pairs cannot establish sensitivity. |
 | Probe budget adequacy | Doubling probe updates changes scores by at most delta / 4 for at least 90% of acceptance checkpoints and introduces no statistically supported reversal of a qualifying pair. |
 
 The fuller reference uses the same dataset, label space, preprocessing, and readout, with a larger probe-training bank and a development-validated training budget. Give calibration recipes their own identities. Correlation with ImageNet-1K or ADE20K is useful supporting evidence, but a different task is not the ground truth for an ImageNet-100 or VOC checkpoint difference. Paired intervals quantify evaluation-sample uncertainty; they do not establish variability across independent pretraining runs.
 
+For fuller-reference convergence, extend a failing checkpoint's training duration
+by doubling it, retaining completed fits and every failed comparison. A reference
+pair may use different validated durations at its endpoints only when each has
+its own passing base/doubled check under the unchanged delta/4 tolerance. The
+training bank, readout, optimizer, rate, seed and development-selection procedure
+must match; publish the endpoint budgets and their convergence evidence with the
+pair. This calibration policy is recorded before accessing reserved checkpoints.
+It does not permit checkpoint-specific monitoring recipes or relax the monitor's
+90% budget-stability requirement.
+
 Publish measured latency, overhead, precision, and pairwise agreement before recommending a cadence. If the targets conflict, record the failure and explicitly revise the proposed sample bank, probe budget, cadence, or detectable-change target, then repeat acceptance on reserved checkpoints. Once released, recipe changes require a new identifier; never silently shrink a published recipe to meet a deadline. Dataset acquisition and preparation are measured separately as one-time setup and must already be complete for monitoring timing.
+
+A declared monitoring caller may choose a fixed numerical profile for each task,
+using the same task-to-profile mapping for every checkpoint. Each ordinary
+`bench.run` call still has one explicit `Execution.numerics` value and retains its
+own correctly labelled result. If the mapping requires multiple calls, measure
+the entire caller from model loading through the last call's cleanup and process
+exit against the unchanged 120-second limit. Keep any caller index distinct from
+ordinary benchmark result artifacts; report each task separately. Isolated task
+timings cannot be substituted for this combined measurement.
+
+The October 27, 2026 user-directed precision revision replaces the original
+delta/2 absolute interval-width cap with publication of every interval and
+validation of confident direction detection. The meaningful-change thresholds,
+90% agreement, minimum qualifying-pair/family coverage, doubled-budget stability,
+latency and measured-overhead gates remain requirements. Preserve the original
+width failures as historical evidence; the revision itself establishes no
+passing monitoring result. The archived policy and explicit instruction are in
+`outputs/r2-acceptance-20261026/precision-policy-revision-20261027/`.
 
 For ImageNet, ADE20K, VOC, and CLEVR, create a fixed development partition from the official training set and reserve the official validation set for final reporting. Pin sample banks for each benchmark's training, development, and final partitions. Use stratification for ImageNet, deterministic source-image grouping for the other datasets, and persist the exact manifests. Do not refit on development data in v1. SPair uses its official train/validation/test partitions, with validation for monitoring and test for final reporting. These split choices differ from some published recipes and must be visible in results. Repeated development evaluation may guide training decisions; final evaluation must not select the training checkpoint or change the recipe.
 
@@ -295,7 +368,7 @@ Regeneration requires the caller's original model checkpoint, source datasets, r
 
 Preflight estimates peak temporary storage from sample count, feature shape, dtype, simultaneously live banks, probes, and atomic-write overhead. Dense banks can be tens of gigabytes even for small backbones. Prune obsolete owned state before allocating new banks, check available space, stream shards, and report the estimate before extraction. Never silently shrink a dataset, lower its resolution, change precision, or delete unrelated state to fit a budget.
 
-Measure dense probe execution early, including feature reads, full-resolution logit resampling, loss/backward, fitting, development scoring, and cleanup. The proposed ADE20K search trains five probes for 40 epochs each. An illustrative 20,000-image bank of 768×32×32 BF16 features occupies 31.5 GB and entails about 6.3 TB of logical feature reads across those 200 training passes; physical disk traffic depends on memory caching. A 16×150×512×512 FP32 logit tensor alone occupies 2.34 GiB before gradients and temporaries. Independent heads may share feature reads when measurements justify it, while retaining separate initialization, optimizer state, batches, update counts, and checkpoint selection. Choose optimizations from these measurements rather than requiring a parallel-head implementation in v1.
+Measure dense probe execution early, including feature reads, full-resolution logit resampling, loss/backward, fitting, development scoring, and cleanup. ADE20K fits the independent candidates requested by its coordinate controller and budget checks. An illustrative 20,000-image bank of 768×32×32 BF16 features occupies 31.5 GB and entails about 6.3 TB of logical feature reads across 200 training passes; physical disk traffic depends on memory caching. A 16×150×512×512 FP32 logit tensor alone occupies 2.34 GiB before gradients and temporaries. Independent heads may share feature reads when measurements justify it, while retaining separate initialization, optimizer state, batches, update counts, and checkpoint selection. Choose optimizations from these measurements rather than requiring a parallel-head implementation in v1.
 
 Optimization acceptance is measured against the same unoptimized protocol: equal sample counts and predictions within tolerance, plus cold/reused-state wall time, images per second, peak GPU memory, peak host memory, peak temporary bytes, and bytes retained after completion. Reading a valid existing feature bank or completed result must invoke the encoder zero times; a new run after pruning must regenerate missing features. Label these cases separately. No arbitrary speedup is promised before measurement. Start with one process and one GPU; external pueue/SLURM jobs can evaluate checkpoints independently using separate workspaces.
 
@@ -335,7 +408,7 @@ A training callback may launch the CLI and log its completed results. GPU alloca
 
 Use `uv`, Hydra, and packaged hierarchical YAML configs. Preserve a single `bench` executable, moving its implementation into `src/bench/cli/` when implemented, with explicit `prepare`, `visualize`, and `prune` actions for dataset setup, task examples, and closing an idle workspace. Dispatch these actions before constructing any model or evaluation configuration that requires a checkpoint. Python callers do not have to use Hydra. Keep CLI and Python evaluation on the same runner.
 
-Proposed Nushell invocation:
+Nushell invocation:
 
 ```nu
 (uv run bench prepare 'names=[imagenet-100,pascal]' 'data_root=~/datasets')
@@ -348,7 +421,7 @@ Proposed Nushell invocation:
 
 The example `model=dinov3` selects a shipped reference adapter. Model configs use Hydra `_target_` factories supplied by the model package or an explicit benchmark adapter, with no source-tree edits to the runner. `data_root` defaults to `~/datasets` for both preparation and CLI evaluation; per-dataset paths can be configured without modifying loaders. Keep Hydra's working-directory changes disabled so relative checkpoint/output paths are predictable. Use distinct output directories for checkpoint, requested benchmark list, and evaluation partition.
 
-Initial implementation layout:
+Package layout:
 
 ```text
 src/bench/
@@ -374,7 +447,7 @@ src/bench/
 
 Keep task-specific source definitions, loading, target preparation, metrics, and preprocessing together. Preparation and evaluation consume the same definitions and manifest formats. Extract shared functions only when two tasks actually share behavior. No public dataset/probe plugin registry in v1. Model adapters are the supported external extension seam.
 
-Use PyTorch/torchvision, NumPy, Pillow, and Hydra/OmegaConf as the initial implementation stack. Experiment trackers remain dependencies of the calling application. Add optional adapter dependencies only when used. Keep research training packages out of the base dependency graph. The scaffold currently requests Python 3.13; validate the chosen dependencies against it before changing that requirement. A reproducible `uv.lock` and a tested environment accompany the first release.
+Use PyTorch/torchvision, NumPy, Pillow, and Hydra/OmegaConf as the initial implementation stack. Experiment trackers remain dependencies of the calling application. Add optional adapter dependencies only when used. Keep research training packages out of the base dependency graph. The package requires Python 3.13 or newer; Python 3.13 is the locked and tested release environment. A reproducible `uv.lock` accompanies the release.
 
 ## Reuse and reference implementations
 

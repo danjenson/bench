@@ -247,6 +247,12 @@ def run(model: VisionModel, *, names: list[str], evaluation="development", data_
                     extraction_done = time.monotonic()
                     metrics, seeds, records = evaluate_selection(selection, selection_directory, bank, scoring_rows, source, task, execution)
                     task_result.update(seed_results=seeds, selection={"digest": selection_digest, "normalization_sha256": selection["normalization_sha256"], "seeds": [{key: value for key, value in seed.items() if key != "head_file"} for seed in selection["seeds"]], "candidates": [{key: value for key, value in candidate.items() if key != "head_file"} for candidate in selection["candidates"]]}, diagnostics=selection["diagnostics"], sample_count=len(scoring_rows), extraction_costs=cost_summary(bank, scoring_rows), extraction_usage=usage, feature_shape=selection["shape"], feature_dtype=selection["dtype"], selection_seconds=selection_finished - task_started)
+                    if 'budget_validation' in selection:
+                        task_result['selection'].update(search=selection['search'], budget_validation=selection['budget_validation'],
+                            validation_fits=[{**fit, 'selected': {k: v for k, v in fit['selected'].items() if k != 'head_file'}}
+                                             for fit in selection['validation_fits']])
+                        if 'search_restarted' in selection:
+                            task_result['selection']['search_restarted'] = selection['search_restarted']
                 statistics_path = output / "statistics" / f"{identifier}.json"
                 write_json(statistics_path, {"schema_version": "1.0.0", "task": identifier, "evaluation": evaluation, "records": records})
                 task_result.update(status="complete", metrics={name: {"value": value, "unit": "percent", "direction": "descriptive" if name.endswith("_std") or "ceiling" in name else "higher"} for name, value in metrics.items()}, statistics={"file": str(statistics_path.relative_to(output)), "sha256": file_digest(statistics_path)}, timing={"through_extraction_seconds": extraction_done - task_started, "scoring_and_commit_seconds": time.monotonic() - extraction_done, "total_seconds": time.monotonic() - task_started})

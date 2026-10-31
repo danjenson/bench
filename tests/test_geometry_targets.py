@@ -22,7 +22,7 @@ def test_count_uses_all_objects():
 
 
 def test_fit_pad_geometry_and_label_alignment():
-    task = resolve_names(["pascal"])[0]
+    task = {**resolve_names(["pascal"])[0], "canvas": 512}
     canvas = make_canvas(Image.new("RGB", (40, 20), "white"), task)
     assert canvas.valid.sum() == 512 * 256
     np.testing.assert_allclose(original_to_canvas([[0, 0], [40, 20]], (40, 20), canvas), [[0, 128], [512, 384]])

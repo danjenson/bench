@@ -9,6 +9,19 @@ from bench.storage import digest, write_json
 
 
 @pytest.fixture
+def historical_monitor_recipes(monkeypatch):
+    """Explicit 100-update inputs for retained diagnostic-identity tests."""
+    module = importlib.import_module("bench.protocols")
+    declared = deepcopy(module.recipes())
+    for name, canvas, rate, decay in [("imagenet-100", 224, .003, 0.), ("pascal", 512, .001, .01)]:
+        task = declared[name]
+        task["canvas"] = canvas
+        task["probe"].update(updates=100, learning_rates=[rate], weight_decays=[decay])
+        task["digest"] = digest({key: value for key, value in task.items() if key != "digest"})
+    monkeypatch.setattr(module, "recipes", lambda: deepcopy(declared))
+
+
+@pytest.fixture
 def clevr_data(tmp_path, monkeypatch):
     root = tmp_path / "data"
     source = root / "CLEVR_v1.0"
@@ -27,6 +40,10 @@ def clevr_data(tmp_path, monkeypatch):
     for name, recipe in task_recipes.items():
         recipe["development_fraction"] = 0.25
         if recipe["source"] == "clevr":
+            # General runner fixtures have bounded fixed grids; controller
+            # integration tests declare their own explicit search policy.
+            recipe["probe"].pop("search_plan", None)
+            recipe["probe"].pop("budget_validation", None)
             recipe["probe"] = {**recipe["probe"], "epochs": 2, "batch_size": 4, "learning_rates": [0.01, 0.03], "weight_decays": [0.0], "seeds": [0, 1]}
         recipe["digest"] = digest({key: value for key, value in recipe.items() if key != "digest"})
     from bench.acquisition import source_recipes

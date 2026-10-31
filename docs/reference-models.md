@@ -8,8 +8,8 @@ library version, readouts and data-selection exposure.
 
 | Model | Public upstream release | Package qualification |
 | --- | --- | --- |
-| torchvision ResNet18 | [Official weights and validation](https://docs.pytorch.org/vision/2.0/models/generated/torchvision.models.resnet18.html), `ResNet18_Weights.IMAGENET1K_V1` | Existing real-data reference checks; remaining task calibration is tracked in the acceptance ledger. |
-| torchvision ViT-B/16 | [Official weights and validation](https://docs.pytorch.org/vision/2.0/models.html), `ViT_B_16_Weights.IMAGENET1K_V1` | Existing real-data reference checks; remaining task calibration is tracked in the acceptance ledger. |
+| torchvision ResNet18 | [Official weights and validation](https://docs.pytorch.org/vision/2.0/models/generated/torchvision.models.resnet18.html), `ResNet18_Weights.IMAGENET1K_V1` | Seven released development references; calibration and local source/protocol qualification pass. |
+| torchvision ViT-B/16 | [Official weights and validation](https://docs.pytorch.org/vision/2.0/models.html), `ViT_B_16_Weights.IMAGENET1K_V1` | Seven released development references; calibration and local source/protocol qualification pass. |
 | DINOv3 | [Official model and weight releases](https://github.com/facebookresearch/dinov3#pretrained-models) | Adapter retained; the exact checkpoint, library compatibility and local real-data qualification must be recorded before advertising a released reference. Publisher access terms apply. |
 
 [reference-models.json](reference-models.json) pins the two existing public weight
@@ -26,4 +26,4 @@ count as public pretrained reference checkpoints.
 The October 24 scope revision preserves previous results and plans as historical
 evidence. Excluded model studies supply no current release requirement or passing
 gate. Retained numerical, precision, budget, search and resource thresholds are
-unchanged. See [acceptance.md](acceptance.md) for outstanding work.
+unchanged. See [acceptance.md](acceptance.md) for the completed audit and retained measurement scopes.

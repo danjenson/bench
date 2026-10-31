@@ -126,7 +126,7 @@ def test_full_probe_calibration_preserves_recipe_and_prunes_variants(clevr_data,
         assert file_digest(joint_output / result["statistics"]["file"]) == result["statistics"]["sha256"]
 
 
-@pytest.mark.parametrize("stage", ["budget-scale", "convergence", "variance-floor"])
+@pytest.mark.parametrize("stage", ["budget-scale", "convergence", "fast-convergence", "long-convergence", "candidate-budget", "candidate-long-budget", "candidate-selection", "candidate-regularized", "selected-monitor", "variance-floor"])
 def test_monitor_calibration_fits_declared_variants_without_changing_named_recipe(stage, clevr_data, tmp_path, monkeypatch):
     root, _ = clevr_data
     protocols = importlib.import_module("bench.protocols").recipes()
@@ -145,18 +145,41 @@ def test_monitor_calibration_fits_declared_variants_without_changing_named_recip
     measure = runpy.run_path(str(Path(__file__).parents[1] / "examples" / "calibrate_monitor_probes.py"))["measure"]
     model = GlobalAdapter()
     output = tmp_path / stage
-    report = measure(model, names=["imagenet-100"], data_root=root, output=output, execution=Execution(device="cpu", numerics="fp32-v1", workers=0, batch_size=4), stage=stage)
+    monitor_recipe = {task["id"]: {"base_updates": 8, "learning_rate_multipliers": [30, 100], "weight_decay": 1.0}} if stage == "selected-monitor" else None
+    report = measure(model, names=["imagenet-100"], data_root=root, output=output, execution=Execution(device="cpu", numerics="fp32-v1", workers=0, batch_size=4), stage=stage, monitor_recipe=monitor_recipe)
     assert report["status"] == "complete" and report["retained_temporary_bytes"] == 0
     assert not (output / ".work").exists()
     assert model.calls == 3
     assert resolve_names(["imagenet-100"])[0] == original
     plan = read_json(output / "plan.json")
-    assert len(plan["variants"]) == len(report["results"]) == (8 if stage == "convergence" else 4)
+    assert len(plan["variants"]) == len(report["results"]) == (12 if stage == "long-convergence" else 8 if stage == "convergence" else 2 if stage in ("candidate-budget", "candidate-long-budget", "candidate-selection", "candidate-regularized") else 4)
     assert len({v["digest"] for v in plan["variants"]}) == len(plan["variants"])
-    assert {v["probe"]["updates"] for v in plan["variants"]} == ({8, 16} if stage == "convergence" else {2, 4})
+    assert {v["probe"]["updates"] for v in plan["variants"]} == ({16, 32, 64} if stage == "long-convergence" else {16, 32} if stage == "candidate-long-budget" else {8, 16} if stage in ("convergence", "fast-convergence", "candidate-budget", "candidate-selection", "candidate-regularized", "selected-monitor") else {2, 4})
+    verifier = runpy.run_path(str(Path(__file__).parents[1] / "scripts/monitor_calibration.py"))
+    assert verifier["declared_variants"]([task], stage, monitor_recipe=monitor_recipe) == plan["variants"]
+    from bench.storage import write_json
+    import bench
+
+    request = tmp_path / "monitor-request.json"
+    write_json(request, {"pins": {}, "package_root": str(Path(bench.__file__).parent),
+        "names": ["imagenet-100"], "stage": stage, "variants": plan["variants"], "monitor_recipe": monitor_recipe,
+        "output": str(output), "expected_model": plan["model"], "numerics": "fp32-v1",
+        "gpu_uuid": "fixture", "cpu_threads": 2, "data_root": str(root),
+        "feature_widths": {"global": 5},
+        "measure_script": str(Path(__file__).parents[1] / "examples/calibrate_monitor_probes.py")})
+    write_json(output / "caller.json", {"request_sha256": file_digest(request),
+        "encoder_state_unchanged": True, "gpu_uuid": "fixture", "cpu_threads": 2})
+    independent = verifier["verify"](request)
+    assert independent["status"] == "verified"
+    assert independent["verified_records"] == 3 * len(plan["variants"])
     for variant in plan["variants"]:
         result = report["results"][variant["id"]]
-        assert result["selection"][0]["updates"] == variant["probe"]["updates"]
+        if stage == "candidate-selection":
+            assert 0 < result["selection"][0]["updates"] <= variant["probe"]["updates"]
+            assert variant["calibration"]["selection_reference"] == "final-update"
+            assert variant["probe"]["scoring"] == "each-epoch"
+        else:
+            assert result["selection"][0]["updates"] == variant["probe"]["updates"]
         assert result["selection"][0]["seed"] == 0
         statistics = output / result["statistics"]["file"]
         assert file_digest(statistics) == result["statistics"]["sha256"]
@@ -167,8 +190,8 @@ def test_monitor_calibration_fits_declared_variants_without_changing_named_recip
         elif stage == "budget-scale":
             assert variant["standardization"] == original["standardization"]
     comparison = report["comparisons"][task["id"]]
-    checks = comparison["learning_rate_checks"] if stage == "convergence" else {"1": comparison}
-    assert len(checks) == (4 if stage == "convergence" else 1)
+    checks = comparison["learning_rate_checks"] if stage in ("convergence", "fast-convergence", "long-convergence", "candidate-budget", "candidate-long-budget", "candidate-selection", "candidate-regularized", "selected-monitor") else {"1": comparison}
+    assert len(checks) == (4 if stage in ("convergence", "long-convergence") else 2 if stage in ("fast-convergence", "selected-monitor") else 1)
     assert all(check["budget_tolerance"] == 0.5 for check in checks.values())
     for check in checks.values():
         assert check["budget_passed"] == (abs(check["doubled_budget_score"] - check["base_score"]) <= 0.5)
@@ -187,7 +210,7 @@ def test_monitor_calibration_fits_declared_variants_without_changing_named_recip
 
 
 @pytest.mark.parametrize("name", ["imagenet-100", "pascal"])
-@pytest.mark.parametrize("stage", ["fuller-reference", "fuller-convergence", "fuller-selection"])
+@pytest.mark.parametrize("stage", ["fuller-reference", "fuller-convergence", "fuller-selection", "selected-fuller"])
 def test_fuller_reference_expands_only_training_and_reuses_preparation(name, stage, tmp_path, monkeypatch):
     import numpy as np
     from PIL import Image
@@ -207,18 +230,20 @@ def test_fuller_reference_expands_only_training_and_reuses_preparation(name, sta
         task.pop("class_list")
         task.pop("class_list_sha256")
         task.update(classes=2, bank={"train_per_class": 3, "development_per_class": 2, "final_per_class": 2})
-        for split, count in [("train", 12), ("val", 3)]:
+        for split, count in [("train", 8), ("val", 3)]:
             for synset in ["n01440764", "n01443537"]:
                 directory = source / split / synset
                 directory.mkdir(parents=True)
                 for index in range(count):
                     Image.new("RGB", (16, 12), (index * 17, 80, 20)).save(directory / f"{index}.jpg")
     else:
-        task["bank"] = {"train": 4, "development": 2, "final": 3}
-        sources[task["source"]]["counts"] = {"train": 12, "final": 4}
+        # Four fuller training images versus two monitor images exercise bank
+        # expansion and disjoint selection without a large CPU probe workload.
+        task["bank"] = {"train": 2, "development": 2, "final": 3}
+        sources[task["source"]]["counts"] = {"train": 6, "final": 4}
         for directory in ["ImageSets/Segmentation", "JPEGImages", "SegmentationClass"]:
             (source / directory).mkdir(parents=True)
-        for split, indices in [("train", range(12)), ("val", range(12, 16))]:
+        for split, indices in [("train", range(6)), ("val", range(6, 10))]:
             (source / "ImageSets/Segmentation" / f"{split}.txt").write_text("\n".join(map(str, indices)))
             for index in indices:
                 Image.new("RGB", (16, 12), (index * 13, 80, 20)).save(source / "JPEGImages" / f"{index}.jpg")
@@ -238,7 +263,7 @@ def test_fuller_reference_expands_only_training_and_reuses_preparation(name, sta
     helper = runpy.run_path(str(Path(__file__).parents[1] / "examples/calibrate_monitor_probes.py"))
     reference = helper["prepare_fuller_reference"](root, task)
     prepared, training = load_prepared(root, reference, "train")
-    assert len(training) == (20 if name == "imagenet-100" else 10)
+    assert len(training) == (12 if name == "imagenet-100" else 4)
     assert all(row in training for row in original_training)
     assert not {row["id"] for row in training} & {row["id"] for row in development + final}
     assert prepared["labels"] == original["labels"]
@@ -268,7 +293,7 @@ def test_fuller_reference_expands_only_training_and_reuses_preparation(name, sta
     monkeypatch.setattr(torch.cuda, "reset_peak_memory_stats", lambda device: None)
     monkeypatch.setattr(torch.cuda, "max_memory_allocated", lambda device: 0)
     scoring_history = {}
-    if stage == "fuller-selection":
+    if stage in ("fuller-selection", "selected-fuller"):
         probes = importlib.import_module("bench.probes")
         score_probe = probes.score
 
@@ -280,7 +305,10 @@ def test_fuller_reference_expands_only_training_and_reuses_preparation(name, sta
         monkeypatch.setattr(probes, "score", record_score)
     model = Adapter()
     output = tmp_path / "fuller"
-    report = helper["measure"](model, names=[name], data_root=root, output=output, execution=Execution(device="cpu", numerics="fp32-v1", workers=0, batch_size=4), stage=stage)
+    reference_recipe = {task["id"]: {"base_epochs": 50 if name == "imagenet-100" else 80,
+                                    "learning_rate_multiplier": 10 if name == "imagenet-100" else 3}} if stage == "selected-fuller" else None
+    report = helper["measure"](model, names=[name], data_root=root, output=output, execution=Execution(device="cpu", numerics="fp32-v1", workers=0, batch_size=4), stage=stage,
+                               reference_recipe=reference_recipe)
     assert report["status"] == "complete" and report["retained_temporary_bytes"] == 0
     assert not (output / ".work").exists()
     assert model.calls == (len(training) + len(development) + 3) // 4
@@ -289,16 +317,38 @@ def test_fuller_reference_expands_only_training_and_reuses_preparation(name, sta
     assert file_digest(reference_manifest) == reference_sha
     plan = read_json(output / "plan.json")
     assert plan["reference_preparation"][task["id"]] == reference
+    if stage in ("fuller-selection", "selected-fuller"):
+        import bench
+        from bench.storage import write_json
+
+        verifier = runpy.run_path(str(Path(__file__).parents[1] / "scripts/monitor_calibration.py"))
+        assert verifier["fuller_task"](task) == reference
+        counts = {task["id"]: len(training)}
+        assert verifier["declared_variants"]([task], stage, counts, reference_recipe) == plan["variants"]
+        request = tmp_path / "fuller-request.json"
+        write_json(request, {"pins": {}, "package_root": str(Path(bench.__file__).parent),
+            "names": [name], "stage": stage, "variants": plan["variants"], "reference_counts": counts,
+            "reference_recipe": reference_recipe,
+            "output": str(output), "expected_model": plan["model"], "numerics": "fp32-v1",
+            "gpu_uuid": "fixture", "cpu_threads": 2, "data_root": str(root),
+            "feature_widths": {"global": 5, "spatial": 3},
+            "measure_script": str(Path(__file__).parents[1] / "examples/calibrate_monitor_probes.py")})
+        write_json(output / "caller.json", {"request_sha256": file_digest(request),
+            "encoder_state_unchanged": True, "gpu_uuid": "fixture", "cpu_threads": 2})
+        assert verifier["verify"](request)["status"] == "verified"
     assert plan["preparation_seconds_excluded_from_evaluation"] >= 0
-    assert len(plan["variants"]) == len(report["results"]) == 8
+    assert len(plan["variants"]) == len(report["results"]) == (2 if stage == "selected-fuller" else 8)
     epochs = 50 if name == "imagenet-100" else 40
     updates = 8 if stage == "fuller-reference" else epochs * ((len(training) + 3) // 4)
+    if stage == "selected-fuller":
+        updates = reference_recipe[task["id"]]["base_epochs"] * ((len(training) + 3) // 4)
+        assert plan["reference_recipe"] == reference_recipe
     assert {variant["probe"]["updates"] for variant in plan["variants"]} == {updates, updates * 2}
     for variant in plan["variants"]:
         assert variant["id"].startswith(reference["id"])
         result = report["results"][variant["id"]]
         selected = result["selection"][0]
-        if stage == "fuller-selection":
+        if stage in ("fuller-selection", "selected-fuller"):
             assert variant["id"].endswith("-bestdev")
             assert variant["probe"]["scoring"] == "each-epoch"
             assert variant["calibration"]["selection_reference"] == "final-update"

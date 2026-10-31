@@ -7,7 +7,7 @@ from torch.nn import functional as F
 def grid_centers(feature):
     height, width = feature["values"].shape[-2:]
     matrix = feature["grid_to_original"].float()
-    y, x = torch.meshgrid((torch.arange(height, device=matrix.device) + 0.5) / height, (torch.arange(width, device=matrix.device) + 0.5) / width, indexing="ij")
+    y, x = torch.meshgrid((torch.arange(height, device=matrix.device, dtype=torch.float32) + 0.5) / height, (torch.arange(width, device=matrix.device, dtype=torch.float32) + 0.5) / width, indexing="ij")
     points = torch.stack([x, y, torch.ones_like(x)], dim=-1)
     return (points @ matrix.T)[..., :2]
 
@@ -36,7 +36,7 @@ def logits_on_canvas(logits, grid_to_original, canvas_to_original, size):
         with torch.autocast(logits.device.type, enabled=False):
             return weights[0] @ logits.float() @ weights[1].T
     height, width = size
-    y, x = torch.meshgrid((torch.arange(height, device=logits.device) + 0.5) / height, (torch.arange(width, device=logits.device) + 0.5) / width, indexing="ij")
+    y, x = torch.meshgrid((torch.arange(height, device=logits.device, dtype=torch.float32) + 0.5) / height, (torch.arange(width, device=logits.device, dtype=torch.float32) + 0.5) / width, indexing="ij")
     points = torch.stack([x, y, torch.ones_like(x)], dim=-1)
     original = (points @ canvas_to_original.to(logits.device).float().T)[..., :2]
     return sample_original(logits, grid_to_original, original)

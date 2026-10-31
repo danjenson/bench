@@ -10,11 +10,13 @@ This accounting does not certify those prerequisites or predeclaration itself.
 import math
 
 
-def summarize(pairs, *, delta, minimum_qualifying_pairs):
+def summarize(pairs, *, delta, minimum_qualifying_pairs, precision_policy="report-intervals"):
     if not math.isfinite(delta) or delta <= 0:
         raise ValueError("The detectable change must be positive and finite")
     if minimum_qualifying_pairs is not None and (type(minimum_qualifying_pairs) is not int or minimum_qualifying_pairs < 3):
         raise ValueError("Predeclare at least three qualifying pairs spanning supported CNN and ViT families")
+    if precision_policy not in ("report-intervals", "absolute-half-width"):
+        raise ValueError("Choose report-intervals or the historical absolute-half-width precision policy")
     rows, identities = [], set()
     for pair in pairs:
         identity = (pair["family"], frozenset((pair["first"], pair["second"])))
@@ -31,9 +33,10 @@ def summarize(pairs, *, delta, minimum_qualifying_pairs):
             lower, upper = measurement["paired_95_interval"]
             if not all(math.isfinite(value) for value in (change, lower, upper)) or lower > upper:
                 raise ValueError("Paired differences and ordered intervals must be finite")
-            row[name] = {**measurement, "supported_direction": 1 if lower > 0 else -1 if upper < 0 else 0}
+            row[name] = {**measurement, "interval_half_width_percentage_points": (upper - lower) / 2,
+                         "supported_direction": 1 if lower > 0 else -1 if upper < 0 else 0}
         monitoring, reference, doubled = (row[key] for key in ("monitoring", "reference", "doubled"))
-        row["precision_passed"] = (monitoring["paired_95_interval"][1] - monitoring["paired_95_interval"][0]) / 2 <= delta / 2 if monitoring else None
+        row["precision_passed"] = monitoring["interval_half_width_percentage_points"] <= delta / 2 if monitoring and precision_policy == "absolute-half-width" else None
         row["qualifies"] = bool(abs(reference["difference_percentage_points"]) >= delta and reference["supported_direction"]) if reference else None
         row["agreement_passed"] = monitoring["supported_direction"] == reference["supported_direction"] if row["qualifies"] and monitoring else None
         row["supported_reversal"] = doubled["supported_direction"] == -reference["supported_direction"] if row["qualifies"] and doubled else None
@@ -49,10 +52,14 @@ def summarize(pairs, *, delta, minimum_qualifying_pairs):
     missing_doubled = sum(row["supported_reversal"] is None for row in qualifying)
     enough = minimum_qualifying_pairs is not None and len(qualifying) >= minimum_qualifying_pairs and families == ["cnn", "vit"]
     complete = bool(rows) and not missing_reference and enough
+    precision_status = ("failed" if precision_failures else "pending" if not rows or missing_precision else "passed") if precision_policy == "absolute-half-width" else ("pending" if not rows or missing_precision else "reported")
     return {
         "delta_percentage_points": delta,
         "pairs": rows,
-        "precision": {"status": "failed" if precision_failures else "pending" if not rows or missing_precision else "passed", "half_width_limit": delta / 2, "failures": precision_failures, "missing": missing_precision},
+        "precision": {"policy": precision_policy, "status": precision_status,
+                      "half_width_limit": delta / 2 if precision_policy == "absolute-half-width" else None,
+                      "failures": precision_failures, "missing": missing_precision,
+                      "scope": "Publish every paired interval and half-width; confident direction detection is assessed by agreement. Historical width-cap evaluation requires absolute-half-width explicitly."},
         "agreement": {"status": "pending" if not complete or missing_agreement else "passed" if 10 * agreeing >= 9 * len(qualifying) else "failed", "minimum_qualifying_pairs": minimum_qualifying_pairs, "qualifying_pairs": len(qualifying), "qualifying_families": families, "agreeing_pairs": agreeing, "fraction": agreeing / len(qualifying) if qualifying and not missing_agreement else None, "missing_reference_pairs": missing_reference, "missing_qualifying_monitoring_pairs": missing_agreement, "sufficient_qualifying_set": enough},
         "budget_reversals": {"status": "failed" if reversals else "pending" if not complete or missing_doubled else "passed", "supported_reversals": reversals, "missing_qualifying_doubled_pairs": missing_doubled, "scope": "Pair-direction check only; the separate 90% checkpoint score-stability gate is also required."},
     }

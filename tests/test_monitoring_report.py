@@ -57,11 +57,11 @@ def test_precision_is_per_pair_and_zero_is_not_a_supported_direction():
     summarize = runpy.run_path(str(Path(__file__).parents[1] / "examples/monitoring_pair_gates.py"))["summarize"]
     pairs = [pair(family, index) for index, family in enumerate(("cnn", "vit", "cnn"))]
     pairs[0]["monitoring"] = {"difference_percentage_points": 1, "paired_95_interval": [0, 2]}
-    report = summarize(pairs, delta=2, minimum_qualifying_pairs=3)
+    report = summarize(pairs, delta=2, minimum_qualifying_pairs=3, precision_policy="absolute-half-width")
     assert report["precision"]["status"] == "passed"
     assert report["agreement"]["status"] == "failed"
     pairs[0]["monitoring"]["paired_95_interval"][1] = 2.01
-    assert summarize(pairs, delta=2, minimum_qualifying_pairs=3)["precision"]["status"] == "failed"
+    assert summarize(pairs, delta=2, minimum_qualifying_pairs=3, precision_policy="absolute-half-width")["precision"]["status"] == "failed"
     invalid = deepcopy(pairs)
     invalid[0]["reference"]["paired_95_interval"] = [float("nan"), 3]
     with pytest.raises(ValueError, match="finite"):
@@ -83,3 +83,19 @@ def test_supported_reference_families_are_required_without_lowering_pair_minimum
         summarize([pair("cnn", 0), pair("vit", 1)], delta=2, minimum_qualifying_pairs=2)
     with pytest.raises(ValueError, match="supported family"):
         summarize([pair("prototype", 0)], delta=2, minimum_qualifying_pairs=3)
+
+
+def test_reported_interval_policy_keeps_confident_direction_and_all_widths():
+    summarize = runpy.run_path(str(Path(__file__).parents[1] / "examples/monitoring_pair_gates.py"))["summarize"]
+    pairs = [pair(family, index, change=10, interval=(1, 19)) for index, family in enumerate(("cnn", "vit", "cnn"))]
+    report = summarize(pairs, delta=2, minimum_qualifying_pairs=3)
+    assert report["precision"]["status"] == "reported" and report["precision"]["half_width_limit"] is None
+    assert report["agreement"]["status"] == "passed"
+    assert all(row["monitoring"]["interval_half_width_percentage_points"] == 9 for row in report["pairs"])
+    assert all(row["precision_passed"] is None for row in report["pairs"])
+    assert summarize(pairs, delta=2, minimum_qualifying_pairs=3, precision_policy="absolute-half-width")["precision"]["status"] == "failed"
+    pairs[0]["monitoring"]["paired_95_interval"] = [0, 20]
+    report = summarize(pairs, delta=2, minimum_qualifying_pairs=3)
+    assert report["precision"]["status"] == "reported" and report["agreement"]["status"] == "failed"
+    with pytest.raises(ValueError, match="precision policy"):
+        summarize(pairs, delta=2, minimum_qualifying_pairs=3, precision_policy="unknown")

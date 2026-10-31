@@ -61,7 +61,7 @@ def cuda_devices(monkeypatch):
 @pytest.mark.parametrize("supported", [False, True])
 def test_bf16_validation_checks_requested_gpu_and_restores_device(cuda_devices, supported):
     cuda_devices["bf16"] = [not supported, supported]
-    execution = Execution(device="cuda:1")
+    execution = Execution(device="cuda:1", numerics="bf16-v1")
     if supported:
         validate_execution(execution)
     else:
@@ -297,7 +297,8 @@ def test_small_global_bank_reuses_shards_across_probe_passes(tmp_path, monkeypat
     manifest = {"shape": [8], "shards": []}
     for index in range(1030):
         name = f"shard-{index}.safetensors"
-        features.save_features(tmp_path / name, {"values": torch.full((1, 8), float(index)), "costs": {}})
+        # Atomic-write behavior is covered separately from this cache fixture.
+        features.save_file({"values": torch.full((1, 8), float(index))}, tmp_path / name)
         manifest["shards"].append({"file": name, "ids": [str(index)]})
     load = features.load_file
     calls = []
@@ -369,6 +370,48 @@ def test_mapping_cache_obeys_available_memory_and_preserves_dense_limits(tmp_pat
     bank.close()
     bank.read_values(["a"])
     assert len(calls) == 2 * expected_loads + 2
+    bank.close()
+
+
+@pytest.mark.parametrize('mapping_limit,expected_loads', [('1048576', 17000), ('65536', 34000), (None, 34000)])
+def test_global_shards_beyond_old_count_limit_follow_host_mapping_budget(tmp_path, monkeypatch, mapping_limit, expected_loads):
+    from types import SimpleNamespace
+    import bench.features as features
+
+    original_read, original_stat = Path.read_text, Path.stat
+
+    def read(path, *args, **kwargs):
+        if path == Path('/proc/meminfo'):
+            return 'MemAvailable: 67108864 kB\n'
+        if path == Path('/proc/sys/vm/max_map_count'):
+            if mapping_limit is None:
+                raise PermissionError('Mapping budget unavailable')
+            return mapping_limit
+        return original_read(path, *args, **kwargs)
+
+    def stat(path, *args, **kwargs):
+        if path.parent == tmp_path and path.suffix == '.safetensors':
+            return SimpleNamespace(st_size=4096)
+        return original_stat(path, *args, **kwargs)
+
+    calls = []
+
+    def load(path, *, device):
+        calls.append(path)
+        return {'values': torch.tensor([[float(path.stem)]])}
+
+    monkeypatch.setattr(Path, 'read_text', read)
+    monkeypatch.setattr(Path, 'stat', stat)
+    monkeypatch.setattr(features, 'load_file', load)
+    ids = [str(index) for index in range(17000)]
+    bank = features.FeatureBank(tmp_path, {'shape': [1], 'shards': [{'file': key + '.safetensors', 'ids': [key]} for key in ids]})
+    expected = torch.arange(17000, dtype=torch.float32)[:, None]
+    for _ in range(2):
+        torch.testing.assert_close(bank.read_values(ids), expected, rtol=0, atol=0)
+    assert len(calls) == expected_loads
+    bank.close()
+    torch.testing.assert_close(bank.read_values(['16999', '0', '16999']), expected[[16999, 0, 16999]], rtol=0, atol=0)
+    assert len(calls) == expected_loads + 2
     bank.close()
 
 

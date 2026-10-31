@@ -1,6 +1,8 @@
 """Fixed candidate recipes. Release calibration is tracked independently."""
 
 from importlib.resources import files
+from functools import lru_cache
+from io import StringIO
 from pathlib import Path
 
 from omegaconf import OmegaConf
@@ -8,8 +10,14 @@ from omegaconf import OmegaConf
 from .storage import digest, file_digest
 
 
+@lru_cache(maxsize=1)
+def _recipe_config(contents):
+    return OmegaConf.load(StringIO(contents))
+
+
 def recipes():
-    config = OmegaConf.to_container(OmegaConf.load(files("bench.cli.configs.task").joinpath("recipes.yaml")), resolve=True)
+    contents = files("bench.cli.configs.task").joinpath("recipes.yaml").read_text(encoding="utf-8")
+    config = OmegaConf.to_container(_recipe_config(contents), resolve=True)
     result = {}
     for name, task in config["tasks"].items():
         recipe = {**config["common"], **config[task["kind"]], **task, "name": name}
@@ -38,6 +46,8 @@ def resolve_names(names):
 
 def evaluation_source_digest(task):
     sources = ["tasks/correspondence.py", "geometry.py"] if task["kind"] == "correspondence" else ["probes.py"]
+    if task.get('probe', {}).get('search_plan'):
+        sources.append('probe_search.py')
     if task["kind"] == "segmentation":
         sources.extend(["geometry.py", "images.py", "tasks/segmentation.py"])
     root = Path(__file__).parent

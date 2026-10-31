@@ -51,3 +51,48 @@ def test_dense_resampling_cuda_values_and_gradients(grid_device, canvas_device):
     torch.nn.functional.cross_entropy(reference[None], target, ignore_index=255).backward()
     torch.nn.functional.cross_entropy(actual[None], target.cuda(), ignore_index=255).backward()
     torch.testing.assert_close(actual_values.grad.cpu().double(), reference_values.grad, rtol=1e-4, atol=1e-6)
+
+
+@pytest.mark.gpu
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA integration job")
+@pytest.mark.parametrize("name", ["pascal", "ade20k"])
+def test_packed_targets_preserve_cuda_probe_training(name, tmp_path, monkeypatch):
+    from bench.features import numerical_mode
+    from bench.probes import PreparedTargets, normalization, train_candidate
+
+    task = resolve_names([name])[0]
+    task["probe"].update(updates=4, batch_size=2, selection="final-update")
+    generator = torch.Generator().manual_seed(41)
+    rows = [{"id": str(i), "image": f"{i}.jpg", "mask": f"{i}.png"} for i in range(2)]
+    features = {row["id"]: {"values": torch.randn(3, 2, 2, generator=generator),
+        "grid_to_original": torch.eye(3), "extent_in_original": torch.tensor([0., 0., 1., 1.])} for row in rows}
+    targets = {row["id"]: (torch.arange(20).reshape(4, 5) + i) % task["classes"] for i, row in enumerate(rows)}
+    targets['0'][0] = 255
+    targets['1'][0, :2] = 255
+    monkeypatch.setattr('bench.probes.label_canvas', lambda root, row, task: (targets[row['id']], torch.eye(3)))
+
+    class Bank:
+        manifest = {"shape": [3, 2, 2]}
+        storage = None
+
+        def __getitem__(self, identifier):
+            return features[identifier]
+
+    bank = Bank()
+    statistics = normalization(bank, rows, task)
+    arguments = (bank, rows, rows, tmp_path, task, statistics, 'cuda', 0, 0.003, 0.01)
+    with numerical_mode(Execution(device='cuda', numerics='fp32-v1')):
+        ordinary = train_candidate(*arguments, tmp_path / 'ordinary.pt')
+        with PreparedTargets(tmp_path, task) as cache:
+            for row in rows:
+                torch.testing.assert_close(cache.read(row)[0].cuda().long(), targets[row['id']].cuda(), rtol=0, atol=0)
+            packed = train_candidate(*arguments, tmp_path / 'packed.pt', targets=cache)
+        assert not cache.entries and cache.current_bytes == 0
+    for key in ['seed', 'epoch', 'updates', 'learning_rate', 'weight_decay', 'probe_parameters', 'development_score']:
+        assert ordinary[key] == packed[key]
+    for key in ['training_loss', 'development_loss']:
+        assert packed[key] == pytest.approx(ordinary[key], rel=1e-6, abs=1e-6)
+    first = torch.load(tmp_path / 'ordinary.pt', weights_only=True)
+    second = torch.load(tmp_path / 'packed.pt', weights_only=True)
+    for key in first:
+        torch.testing.assert_close(first[key], second[key], rtol=1e-5, atol=1e-6)

@@ -211,6 +211,14 @@ class FeatureBank:
             self._mapping_bytes_limit = max(self._mapping_bytes_limit, min(4 * 1024 ** 3, available // 8))
             if self._mapping_bytes_limit > 256 * 1024 ** 2:
                 self._mapping_count_limit = 16384
+                try:
+                    # Small extraction batches can produce more than 16k
+                    # global shards while the entire bank still fits the byte
+                    # budget. Keep headroom for other process mappings.
+                    mappings = int(Path("/proc/sys/vm/max_map_count").read_text())
+                    self._mapping_count_limit = min(65536, max(1024, mappings // 4))
+                except (OSError, ValueError):
+                    pass
 
     def __getitem__(self, sample_id):
         filename, index = self.locations[sample_id]
@@ -267,6 +275,10 @@ def storage_estimate(manifest, sample_count, task, batch_size):
         diagnostics = 1024 + 128 * task["diagnostics"]["maximum_images"] + 256 * math.prod(manifest["shape"][1:])
         # Include tensor-container headers, compact search/selection JSON and atomic copies.
         probe_bytes = heads + 2 * (8 * manifest["shape"][0] + 4096 + diagnostics + 1024 * (candidates + seeds + 2))
+        if plan := recipe.get('search_plan'):
+            maximum_fits = len(plan['learning_rate_ladder']) * len(plan['weight_decay_ladder'])
+            maximum_fits += len(recipe['budget_validation']['multipliers']) - 1 + seeds - 1
+            probe_bytes += 8192 * (maximum_fits + 2)
     return {"features_bytes": features, "atomic_shard_bytes": atomic_shard, "probe_bytes": probe_bytes, "total_bytes": features + atomic_shard + probe_bytes}
 
 

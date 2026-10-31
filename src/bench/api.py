@@ -52,7 +52,7 @@ class Execution:
     batch_size: int = 64
     workers: int = 8
     work_dir: Path | None = None
-    numerics: Literal["bf16-v1", "fp32-v1"] = "bf16-v1"
+    numerics: Literal["bf16-v1", "fp32-v1"] = "fp32-v1"
 
 
 @dataclass(frozen=True)

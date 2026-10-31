@@ -35,19 +35,69 @@ class ScaledBank:
         return self.bank.read_values(sample_ids).float() * self.factor
 
 
-def measure(model, *, names, data_root, output, execution, stage="budget-scale"):
-    if stage not in ("budget-scale", "variance-floor", "learning-rate", "convergence", "fuller-reference", "fuller-convergence", "fuller-selection", "search-boundary", "search-extension", "search-weight-decay", "search-grid"):
+def candidate_budgets(kind, stage):
+    budgets = (4, 8) if kind == "classification" else (16, 32)
+    if stage == "candidate-long-budget" or (kind == "segmentation" and stage in ("candidate-regularized-long", "candidate-regularized-tail")):
+        budgets = tuple(2 * value for value in budgets)
+    if stage == "candidate-regularized-tail":
+        if kind != "segmentation":
+            raise ValueError("Missing-budget tails support segmentation only")
+        budgets = (budgets[-1],)
+    return budgets
+
+
+def selected_monitor_cases(tasks, recipe):
+    assert isinstance(recipe, dict) and set(recipe) == {task['id'] for task in tasks}, 'Declare each requested monitoring task'
+    result = {}
+    for task in tasks:
+        setting = recipe[task['id']]
+        assert set(setting) == {'base_updates', 'learning_rate_multipliers', 'weight_decay'}, 'Unexpected monitoring settings'
+        updates = setting['base_updates']
+        assert type(updates) is int and updates >= task['probe']['updates'] and updates % task['probe']['updates'] == 0
+        rates = setting['learning_rate_multipliers']
+        assert isinstance(rates, list) and rates and len(set(rates)) == len(rates)
+        assert all(type(rate) is int and rate in (1, 3, 10, 30, 100, 300) for rate in rates)
+        decay = setting['weight_decay']
+        assert type(decay) in (int, float) and math.isfinite(decay) and decay >= 0
+        factor = updates // task['probe']['updates']
+        result[task['id']] = [(budget, 1.0, rate) for rate in rates for budget in (factor, 2 * factor)]
+    return result
+
+
+def measure(model, *, names, data_root, output, execution, stage="budget-scale", reference_recipe=None, monitor_recipe=None):
+    if stage not in ("budget-scale", "variance-floor", "learning-rate", "convergence", "fast-convergence", "long-convergence", "candidate-budget", "candidate-long-budget", "candidate-selection", "candidate-regularized", "candidate-regularized-long", "candidate-regularized-tail", "selected-monitor", "fuller-reference", "fuller-convergence", "fuller-selection", "selected-fuller", "search-boundary", "search-extension", "search-weight-decay", "search-grid"):
         raise ValueError("Choose the budget-scale, variance-floor, learning-rate, convergence, fuller-reference, fuller-convergence, fuller-selection, search-boundary, search-extension, search-weight-decay or search-grid calibration stage")
     tasks = resolve_names(names)
+    monitor_cases = selected_monitor_cases(tasks, monitor_recipe) if stage == "selected-monitor" else {}
+    if stage != "selected-monitor":
+        assert monitor_recipe is None
+    selected_cases = {}
+    if stage == "selected-fuller":
+        if not isinstance(reference_recipe, dict) or set(reference_recipe) != {task["id"] for task in tasks}:
+            raise ValueError("Predeclare one selected fuller recipe for each requested task")
+        for task in tasks:
+            setting = reference_recipe[task["id"]]
+            unit = 50 if task["kind"] == "classification" else 40
+            if (set(setting) != {"base_epochs", "learning_rate_multiplier"}
+                    or type(setting["base_epochs"]) is not int or setting["base_epochs"] < unit
+                    or setting["base_epochs"] % unit or type(setting["learning_rate_multiplier"]) is not int
+                    or setting["learning_rate_multiplier"] not in (1, 3, 10, 30)):
+                raise ValueError("Selected fuller settings must retain the declared grid and positive whole epoch-budget multiples")
+            factor = setting["base_epochs"] // unit
+            selected_cases[task["id"]] = [(factor, 1.0, setting["learning_rate_multiplier"]), (2 * factor, 1.0, setting["learning_rate_multiplier"])]
+    elif reference_recipe is not None:
+        raise ValueError("Reference settings apply only to selected-fuller")
     weight_search = stage in ("search-weight-decay", "search-grid")
     full_probe = stage in ("search-boundary", "search-extension") or weight_search
     scale_check = stage in ("budget-scale", "variance-floor")
-    long_reference = stage in ("fuller-convergence", "fuller-selection")
+    long_reference = stage in ("fuller-convergence", "fuller-selection", "selected-fuller")
     allowed = ("imagenet-1k", "ade20k", "clevr-count", "clevr-distance") if full_probe else ("imagenet-100", "pascal")
     if any(task["name"] not in allowed for task in tasks):
         raise ValueError(f"The {stage} stage supports only {', '.join(allowed)}")
     if weight_search and any(len(task["probe"]["weight_decays"]) < 2 or max(task["probe"]["weight_decays"]) <= 0 for task in tasks):
         raise ValueError("Weight-decay calibration requires a searched grid with a positive upper bound")
+    if stage == "candidate-selection" and any(task["kind"] != "classification" for task in tasks):
+        raise ValueError("The selected monitoring candidate supports classification only")
     if any(task["method"] not in model.info.readouts for task in tasks):
         raise ValueError("The model must support every requested calibration readout")
     output, data_root = resolve_path(output), resolve_path(data_root)
@@ -67,16 +117,30 @@ def measure(model, *, names, data_root, output, execution, stage="budget-scale")
         plan["software"] = {str(path.relative_to(source_root)): file_digest(path) for path in source_root.rglob("*.py")}
         plan["hardware"] = {"platform": platform.platform(), "logical_cpus": os.cpu_count(), "host_memory_bytes": os.sysconf("SC_PHYS_PAGES") * os.sysconf("SC_PAGE_SIZE"), "gpu": torch.cuda.get_device_name(execution.device), "cuda_runtime": torch.version.cuda}
         plan["execution"] = {"device": execution.device, "batch_size": execution.batch_size, "workers": execution.workers}
+        if selected_cases:
+            plan["reference_recipe"] = reference_recipe
+        if monitor_cases:
+            plan["monitor_recipe"] = monitor_recipe
         if reference_tasks:
             plan["reference_preparation"] = reference_tasks
             plan["scope"] = "larger training-bank development budget diagnostic; budget validation and reserved-checkpoint agreement remain required"
             plan["preparation_seconds_excluded_from_evaluation"] = preparation_seconds
-        rates = (1, 3, 10, 30, 100) if stage == "search-extension" else (1, 3, 10) if full_probe else (1, 3, 10, 30)
-        budgets = (2, 4) if stage == "search-extension" else (4, 8) if stage in ("convergence", "fuller-reference") else (1, 2)
+        rates = (3, 10, 30, 100) if stage == "long-convergence" else (100, 300) if stage == "fast-convergence" else (1, 3, 10, 30, 100) if stage == "search-extension" else (1, 3, 10) if full_probe else (1, 3, 10, 30)
+        budgets = (8, 16, 32) if stage == "long-convergence" else (2, 4) if stage == "search-extension" else (4, 8) if stage in ("convergence", "fast-convergence", "fuller-reference") else (1, 2)
         cases = [(1, 1.0, 1), (2, 1.0, 1), (1, 0.1, 1), (1, 10.0, 1)] if scale_check else [(budget, 1.0, rate) for rate in rates for budget in budgets]
         if weight_search:
             cases = [(budget, 1.0, 1) for budget in budgets]
         for task in tasks:
+            if selected_cases:
+                cases = selected_cases[task["id"]]
+            if stage in ("candidate-budget", "candidate-long-budget", "candidate-selection", "candidate-regularized", "candidate-regularized-long", "candidate-regularized-tail"):
+                # Screen the late-checkpoint candidate on the remaining calibration
+                # checkpoints before choosing a recipe or reading reserved weights.
+                budgets = candidate_budgets(task["kind"], stage)
+                cases = [(budget, 1.0, 10) for budget in budgets]
+            if monitor_cases:
+                cases = monitor_cases[task["id"]]
+                budgets = tuple(sorted({case[0] for case in cases}))
             budget_key = "epochs" if full_probe else "updates"
             base_rates = [max(task["probe"]["learning_rates"])] if full_probe and not weight_search else task["probe"]["learning_rates"]
             if long_reference:
@@ -85,6 +149,9 @@ def measure(model, *, names, data_root, output, execution, stage="budget-scale")
                 reference_updates = reference_epochs * math.ceil(prepared["splits"]["train"]["count"] / task["probe"]["batch_size"])
             for multiplier, scale, rate_multiplier in cases:
                 variant = deepcopy(reference_tasks.get(task["id"], task))
+                # Each diagnostic declares its exact grid and duration.
+                variant["probe"].pop("search_plan", None)
+                variant["probe"].pop("budget_validation", None)
                 variant["probe"][budget_key] = (reference_updates if long_reference else variant["probe"][budget_key]) * multiplier
                 variant["probe"]["learning_rates"] = [rate * rate_multiplier for rate in base_rates]
                 variant["probe"]["seeds"] = [0]
@@ -100,14 +167,18 @@ def measure(model, *, names, data_root, output, execution, stage="budget-scale")
                 if stage == "variance-floor":
                     variant["standardization"]["variance_floor"] = 1e-8
                     variant["id"] += "-floor1e-08"
-                if stage == "fuller-selection":
+                if stage in ("fuller-selection", "selected-fuller", "candidate-selection"):
                     variant["probe"].update(selection="best-development-score-then-earlier-epoch-then-candidate-order", scoring="each-epoch")
                     variant["id"] += "-bestdev"
+                if stage in ("candidate-regularized", "candidate-regularized-long", "candidate-regularized-tail", "selected-monitor"):
+                    decay = monitor_recipe[task["id"]]["weight_decay"] if stage == "selected-monitor" else 1.0
+                    variant["probe"]["weight_decays"] = [decay]
+                    variant["id"] += f"-wd{decay:g}"
                 variant["name"], variant["release_status"] = variant["id"], "calibration-only"
                 variant["calibration"] = {"base_task": task["id"], "base_task_digest": task["digest"], "feature_scale_before_standardization": scale, "scale_arithmetic": "float32", "budget_multiplier": multiplier, "learning_rate_multiplier": rate_multiplier, "learning_rate_reference": base_rates}
                 if long_reference:
                     variant["calibration"]["reference_epochs"] = reference_epochs * multiplier
-                if stage == "fuller-selection":
+                if stage in ("fuller-selection", "selected-fuller", "candidate-selection"):
                     variant["calibration"]["selection_reference"] = task["probe"]["selection"]
                 if stage == "variance-floor":
                     variant["calibration"]["variance_floor_reference"] = task["standardization"]["variance_floor"]
@@ -116,9 +187,11 @@ def measure(model, *, names, data_root, output, execution, stage="budget-scale")
                     variant["calibration"]["weight_decay_multiplier"] = 10
                 if stage == "search-grid":
                     variant["calibration"]["learning_rate_extension_multipliers"] = [3, 10]
+                if stage in ("candidate-regularized", "candidate-regularized-long", "candidate-regularized-tail", "selected-monitor"):
+                    variant["calibration"].update(weight_decay_reference=task["probe"]["weight_decays"], weight_decay_candidate=decay)
                 variant["digest"] = digest({key: value for key, value in variant.items() if key != "digest"})
                 plan["variants"].append(variant)
-        plan["gates"] = {"budget_absolute_percentage_points": {"imagenet100-linear-v1": 0.5, "voc2012-linear-v1": 0.25}, "scale_absolute_percentage_points": {task["id"]: task["numerical_tolerance"]["absolute_percentage_points"] for task in tasks}}
+        plan["gates"] = {"budget_absolute_percentage_points": {task["id"]: 0.5 if task["kind"] == "classification" else 0.25 for task in tasks}, "scale_absolute_percentage_points": {task["id"]: task["numerical_tolerance"]["absolute_percentage_points"] for task in tasks}}
         if full_probe:
             plan["gates"]["budget_absolute_percentage_points"] = {}
             plan["scope"] = "development search coverage and budget diagnostic with seed zero; monitoring acceptance thresholds do not certify full probes"
@@ -129,6 +202,15 @@ def measure(model, *, names, data_root, output, execution, stage="budget-scale")
         bank = None
         try:
             for task in tasks:
+                if selected_cases:
+                    cases = selected_cases[task["id"]]
+                    budgets = tuple(case[0] for case in cases)
+                if stage in ("candidate-budget", "candidate-long-budget", "candidate-selection", "candidate-regularized", "candidate-regularized-long", "candidate-regularized-tail"):
+                    budgets = candidate_budgets(task["kind"], stage)
+                    cases = [(budget, 1.0, 10) for budget in budgets]
+                if monitor_cases:
+                    cases = monitor_cases[task["id"]]
+                    budgets = tuple(sorted({case[0] for case in cases}))
                 preparation_task = reference_tasks.get(task["id"], task)
                 prepared, training = load_prepared(data_root, preparation_task, "train")
                 _, development = load_prepared(data_root, preparation_task, "development")
@@ -159,7 +241,7 @@ def measure(model, *, names, data_root, output, execution, stage="budget-scale")
                     "raw_encoder_diagnostics": diagnostics,
                 }
                 checks = {}
-                for rate in sorted({case[2] for case in cases}):
+                for rate in (sorted({case[2] for case in cases}) if len(budgets) > 1 else []):
                     base, doubled = scores[budgets[0], 1.0, rate], scores[budgets[1], 1.0, rate]
                     checks[str(rate)] = {"base_score": base, "doubled_budget_score": doubled, "doubled_budget_difference": doubled - base}
                     if budget_tolerance is not None:
@@ -170,6 +252,14 @@ def measure(model, *, names, data_root, output, execution, stage="budget-scale")
                     report["comparisons"][task["id"]].update(checks["1"], scale_score_differences=differences, scale_tolerance=tolerance, scale_passed=all(abs(delta) <= tolerance for delta in differences.values()))
                 else:
                     report["comparisons"][task["id"]]["learning_rate_checks"] = checks
+                if stage == "long-convergence":
+                    report["comparisons"][task["id"]]["budget_series"] = {
+                        str(rate): [{"base_updates": task["probe"]["updates"] * first,
+                            "doubled_updates": task["probe"]["updates"] * second,
+                            "base_score": scores[first, 1.0, rate], "doubled_budget_score": scores[second, 1.0, rate],
+                            "difference": scores[second, 1.0, rate] - scores[first, 1.0, rate],
+                            "passed": abs(scores[second, 1.0, rate] - scores[first, 1.0, rate]) <= budget_tolerance}
+                            for first, second in zip(budgets, budgets[1:])] for rate in rates}
                 bank.close()
                 remove(bank.directory, storage=storage)
                 bank = None
@@ -222,13 +312,17 @@ def main():
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--names", nargs="+", choices=["imagenet-100", "pascal", "imagenet-1k", "ade20k", "clevr-count", "clevr-distance"], default=["imagenet-100", "pascal"])
     parser.add_argument("--batch-size", type=int, default=8)
-    parser.add_argument("--stage", choices=["budget-scale", "variance-floor", "learning-rate", "convergence", "fuller-reference", "fuller-convergence", "fuller-selection", "search-boundary", "search-extension", "search-weight-decay", "search-grid"], default="budget-scale")
+    parser.add_argument("--stage", choices=["budget-scale", "variance-floor", "learning-rate", "convergence", "fast-convergence", "long-convergence", "candidate-budget", "candidate-long-budget", "candidate-selection", "candidate-regularized", "candidate-regularized-long", "candidate-regularized-tail", "selected-monitor", "fuller-reference", "fuller-convergence", "fuller-selection", "selected-fuller", "search-boundary", "search-extension", "search-weight-decay", "search-grid"], default="budget-scale")
+    parser.add_argument("--reference-recipe", type=Path, help="Predeclared per-task epoch budgets and rate multipliers for selected-fuller")
+    parser.add_argument("--monitor-recipe", type=Path, help="Predeclared monitor budgets, rate multipliers and weight decay")
     args = parser.parse_args()
     with torch.random.fork_rng(devices=[]):
         torch.manual_seed(0)
         model = instantiate(OmegaConf.load(args.model), _convert_="all")
     model.cuda()
-    measure(model, names=args.names, data_root=args.data_root, output=args.output, execution=bench.Execution(device="cuda", batch_size=args.batch_size, numerics="fp32-v1"), stage=args.stage)
+    measure(model, names=args.names, data_root=args.data_root, output=args.output, execution=bench.Execution(device="cuda", batch_size=args.batch_size, numerics="fp32-v1"), stage=args.stage,
+            reference_recipe=read_json(args.reference_recipe) if args.reference_recipe else None,
+            monitor_recipe=read_json(args.monitor_recipe) if args.monitor_recipe else None)
 
 
 if __name__ == "__main__":

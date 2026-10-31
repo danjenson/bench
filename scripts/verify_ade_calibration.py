@@ -90,6 +90,8 @@ def verify(directory, *, expected_model, software, feature_shape, baseline, path
             "feature_scale_before_standardization": 1.0, "scale_arithmetic": "float32",
             "budget_multiplier": budget, "learning_rate_multiplier": rate, "learning_rate_reference": [base_rate]}
         expected = deepcopy(task)
+        expected["probe"].pop("search_plan", None)
+        expected["probe"].pop("budget_validation", None)
         expected["probe"].update(epochs=task["probe"]["epochs"] * budget, learning_rates=[base_rate * rate], seeds=[0])
         identifier = f"{task['id']}-calibration-e{expected['probe']['epochs']}-s1-lrm{rate}"
         expected.update(id=identifier, name=identifier, release_status="calibration-only", calibration=calibration)

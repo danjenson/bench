@@ -32,6 +32,8 @@ def test_ade_search_verifier_reconstructs_dense_counts_and_rejects_corruption(tm
     protocols = deepcopy(recipes())
     task = protocols["ade20k"]
     task.update(canvas=16, development_fraction=0.2)
+    task["probe"].pop("search_plan", None)
+    task["probe"].pop("budget_validation", None)
     task["probe"].update(epochs=2, batch_size=2, learning_rates=[0.003])
     task["digest"] = digest({key: value for key, value in task.items() if key != "digest"})
     sources = source_recipes()
@@ -74,10 +76,10 @@ def test_ade_search_verifier_reconstructs_dense_counts_and_rejects_corruption(tm
     helper = repo / "examples/calibrate_monitor_probes.py"
     extension_helper = tmp_path / "calibrate_monitor_probes.py"
     source_text = helper.read_text()
-    marker = '        budgets = (2, 4) if stage == "search-extension"'
+    marker = '\n        budgets = (8, 16, 32) if stage == "long-convergence"'
     assert source_text.count(marker) == 1
     extension_helper.write_text(source_text.replace(marker,
-        '        if stage == "search-boundary":\n            rates = (30,)\n' + marker))
+        '\n        if stage == "search-boundary":\n            rates = (30,)' + marker))
     extension = tmp_path / "extension"
     runpy.run_path(str(extension_helper))["measure"](model, names=["ade20k"], data_root=root,
         output=extension, execution=execution, stage="search-boundary")
