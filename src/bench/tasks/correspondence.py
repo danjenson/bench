@@ -76,20 +76,22 @@ def match_pair(source, target, annotation, threshold=0.1):
     return {"correct": int(((matches - target_points).norm(dim=1) <= radius).sum()), "eligible": len(target_points), "grid_ceiling_correct": int((torch.cdist(target_points, centers).min(1).values <= radius).sum())}
 
 
-def evaluate_pairs(bank, rows, root, task):
+def evaluate_pairs(bank, rows, root, task, *, progress=None):
     from collections import defaultdict
 
     from ..storage import contained_path
+    from ..progress import progress_bar
 
     records, groups = [], defaultdict(lambda: {"correct": 0, "eligible": 0, "grid_ceiling_correct": 0})
-    for row in rows:
-        annotation = read_json(contained_path(root, row["annotation"]))
-        counts = match_pair(bank[row["source_id"]], bank[row["target_id"]], annotation, task["threshold"])
-        breakdown = {key: annotation.get(key) for key in ("category", "viewpoint_variation", "scale_variation", "occlusion", "truncation")}
-        records.append({"id": row["id"], "source_id": row["source_id"], "target_id": row["target_id"], **counts, "breakdown": breakdown})
-        for group in ["all"] + [f"{key}={value}" for key, value in breakdown.items()]:
-            for key, value in counts.items():
-                groups[group][key] += value
+    with progress_bar(rows, total=len(rows), desc=f"{task.get('id', 'bench')} match", unit="pair", enabled=progress) as bar:
+        for row in bar:
+            annotation = read_json(contained_path(root, row["annotation"]))
+            counts = match_pair(bank[row["source_id"]], bank[row["target_id"]], annotation, task["threshold"])
+            breakdown = {key: annotation.get(key) for key in ("category", "viewpoint_variation", "scale_variation", "occlusion", "truncation")}
+            records.append({"id": row["id"], "source_id": row["source_id"], "target_id": row["target_id"], **counts, "breakdown": breakdown})
+            for group in ["all"] + [f"{key}={value}" for key, value in breakdown.items()]:
+                for key, value in counts.items():
+                    groups[group][key] += value
     totals = groups["all"]
     if not totals["eligible"]:
         raise ValueError("SPair partition has no eligible correspondences")

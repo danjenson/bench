@@ -17,6 +17,7 @@ from torch.nn import functional as F
 from .features import save_tensors
 from .geometry import logits_on_canvas, valid_centers
 from .images import fit_pad_geometry, fit_pad_mask
+from .progress import progress_bar
 from .protocols import evaluation_source_digest
 from .storage import contained_path, digest, file_digest, read_json, remove, write_json
 from .tasks.segmentation import read_mask
@@ -125,27 +126,28 @@ class LinearProbe(nn.Module):
         return F.linear(features, self.weight, self.bias)
 
 
-def normalization(bank, rows, task):
+def normalization(bank, rows, task, *, progress=None):
     total, mean, centered_sum = 0, None, None
-    for row in rows:
-        feature = bank[row["id"]]
-        values = feature["values"].float()
-        if values.ndim == 3:
-            values = values[:, valid_centers(feature)].T
-        else:
-            values = values[None]
-        count = len(values)
-        if not count:
-            continue
-        local_mean = values.mean(0)
-        local_sum = (values - local_mean).square().sum(0)
-        if mean is None:
-            mean, centered_sum, total = local_mean, local_sum, count
-        else:
-            delta = local_mean - mean
-            centered_sum += local_sum + delta.square() * (total * count / (total + count))
-            mean += delta * (count / (total + count))
-            total += count
+    with progress_bar(rows, total=len(rows), desc=f"{task.get('id', 'bench')} normalize", unit="image", enabled=progress) as bar:
+        for row in bar:
+            feature = bank[row["id"]]
+            values = feature["values"].float()
+            if values.ndim == 3:
+                values = values[:, valid_centers(feature)].T
+            else:
+                values = values[None]
+            count = len(values)
+            if not count:
+                continue
+            local_mean = values.mean(0)
+            local_sum = (values - local_mean).square().sum(0)
+            if mean is None:
+                mean, centered_sum, total = local_mean, local_sum, count
+            else:
+                delta = local_mean - mean
+                centered_sum += local_sum + delta.square() * (total * count / (total + count))
+                mean += delta * (count / (total + count))
+                total += count
     if total == 0:
         raise ValueError("No valid feature locations in the probe-training bank")
     return {"mean": mean, "std": (centered_sum / total).clamp_min(task["standardization"]["variance_floor"]).sqrt(), "count": total}
@@ -317,11 +319,11 @@ def miou(intersection, union):
     return float((intersection[eligible].double() / union[eligible]).mean() * 100)
 
 
-def score(probe, bank, rows, root, task, statistics, device, seed, targets=None, features=None):
+def score(probe, bank, rows, root, task, statistics, device, seed, targets=None, features=None, *, progress=None):
     total_loss, denominator, records = 0.0, 0, []
     intersections = torch.zeros(task["classes"], dtype=torch.int64)
     unions = torch.zeros_like(intersections)
-    with torch.no_grad():
+    with torch.no_grad(), progress_bar(total=len(rows), desc=f"{task.get('id', 'bench')} score seed={seed}", unit="image", enabled=progress) as bar:
         if task["kind"] == "classification":
             batch_size = task["probe"]["batch_size"]
             for offset in range(0, len(rows), batch_size):
@@ -333,6 +335,7 @@ def score(probe, bank, rows, root, task, statistics, device, seed, targets=None,
                 denominator += len(batch)
                 predictions = logits.argmax(1).cpu().tolist()
                 records.extend({"id": row["id"], "seed": seed, "label": row["target"], "prediction": prediction} for row, prediction in zip(batch, predictions))
+                bar.update(len(batch))
         else:
             for row in rows:
                 feature, values = spatial_values(bank, row["id"], statistics, device, features)
@@ -347,11 +350,12 @@ def score(probe, bank, rows, root, task, statistics, device, seed, targets=None,
                 intersections += intersection.cpu()
                 unions += union.cpu()
                 records.append({"id": row["id"], "seed": seed, "intersection": intersection.cpu().tolist(), "union": union.cpu().tolist(), "eligible_pixels": eligible, "prediction_sha256": hashlib.sha256(prediction.cpu().numpy().astype(np.uint8).tobytes()).hexdigest()})
+                bar.update(1)
     metric = 100 * sum(record["label"] == record["prediction"] for record in records) / len(records) if task["kind"] == "classification" else miou(intersections, unions)
     return {"score": metric, "loss": total_loss / denominator, "sample_count": len(rows), "eligible_count": denominator}, records
 
 
-def train_candidate(bank, rows, development, root, task, statistics, device, seed, learning_rate, weight_decay, destination, targets=None, features=None):
+def train_candidate(bank, rows, development, root, task, statistics, device, seed, learning_rate, weight_decay, destination, targets=None, features=None, *, progress=None):
     recipe = task["probe"]
     probe = LinearProbe(bank.manifest["shape"][0], task["classes"], seed, device)
     optimizer = torch.optim.AdamW(probe.parameters(), lr=learning_rate, weight_decay=weight_decay, betas=tuple(recipe["betas"]), eps=recipe["epsilon"], amsgrad=recipe["amsgrad"], foreach=recipe["foreach"], fused=recipe["fused"])
@@ -361,7 +365,8 @@ def train_candidate(bank, rows, development, root, task, statistics, device, see
     total_updates = recipe.get("updates", recipe.get("epochs", 1) * updates_per_epoch)
     warmup = max(1, round(total_updates * recipe["warmup_fraction"]))
     step, epoch, best = 0, 0, None
-    with FitResampling(task, device) as resampling:
+    description = f"{task.get('id', 'bench')} fit seed={seed} lr={learning_rate:g} wd={weight_decay:g}"
+    with FitResampling(task, device) as resampling, progress_bar(total=total_updates, desc=description, unit="update", enabled=progress) as bar:
         while step < total_updates:
             order = torch.randperm(len(rows), generator=generator).tolist()
             epoch += 1
@@ -400,9 +405,12 @@ def train_candidate(bank, rows, development, root, task, statistics, device, see
                         loss_sum += value
                     loss_count += valid_count
                 optimizer.step()
+                bar.update(1)
             if recipe["selection"] == "final-update" and step < total_updates:
                 continue
-            development_result, _ = score(probe, bank, development, root, task, statistics, device, seed, targets=targets, features=features)
+            bar.set_description(f"{description} validating", refresh=True)
+            development_result, _ = score(probe, bank, development, root, task, statistics, device, seed, targets=targets, features=features, progress=False)
+            bar.set_description(description, refresh=False)
             # Strictly greater preserves earlier-epoch ties.
             if best is None or development_result["score"] > best["development_score"] or recipe["selection"] == "final-update":
                 best = {"seed": seed, "epoch": epoch, "updates": step, "learning_rate": learning_rate, "weight_decay": weight_decay, "development_score": development_result["score"], "development_loss": development_result["loss"], "training_loss": loss_sum / loss_count, "probe_parameters": sum(parameter.numel() for parameter in probe.parameters())}
@@ -444,7 +452,7 @@ def _fit_probe(bank, *, training, development, root, task, directory, execution,
     ready = read_selection(directory)
     if ready is not None:
         return ready
-    statistics = normalization(bank, training, task)
+    statistics = normalization(bank, training, task, progress=execution.progress)
     save_tensors(directory / "normalization.pt", statistics, storage=bank.storage)
     with StandardizedFeatures(bank, training, development, statistics, execution.device) as features:
         return _fit_candidates(bank, training=training, development=development, root=root, task=task,
@@ -461,7 +469,7 @@ def _fit_candidates(bank, *, training, development, root, task, directory, execu
             variant['probe'].update(epochs=epochs, learning_rates=[rate], weight_decays=[decay], seeds=[seed])
             variant['digest'] = digest({key: value for key, value in variant.items() if key != 'digest'})
             return train_candidate(bank, training, development, root, variant, statistics, execution.device,
-                seed, rate, decay, destination, targets=targets, features=features)
+                seed, rate, decay, destination, targets=targets, features=features, progress=execution.progress)
 
         header = {'shape': bank.manifest['shape'], 'dtype': bank.manifest['dtype'],
             'bytes_per_sample': bank.manifest['bytes_per_sample'],
@@ -489,7 +497,7 @@ def _fit_candidates(bank, *, training, development, root, task, directory, execu
     for index, (learning_rate, weight_decay) in enumerate(candidates):
         if index < len(search["candidates"]):
             continue
-        candidate = train_candidate(bank, training, development, root, task, statistics, execution.device, 0, learning_rate, weight_decay, directory / f"candidate-{index}.pt", targets=targets, features=features)
+        candidate = train_candidate(bank, training, development, root, task, statistics, execution.device, 0, learning_rate, weight_decay, directory / f"candidate-{index}.pt", targets=targets, features=features, progress=execution.progress)
         search["candidates"].append(candidate)
         previous = search["winner"]
         if previous is None or (-candidate["development_score"], candidate["epoch"], index) < (-previous["development_score"], previous["epoch"], search["winner_index"]):
@@ -504,7 +512,7 @@ def _fit_candidates(bank, *, training, development, root, task, directory, execu
         metadata = read_json(metadata_path) if metadata_path.exists() else None
         path = directory / f"seed-{seed}.pt"
         if metadata is None or metadata.get("digest") != digest({key: value for key, value in metadata.items() if key != "digest"}) or not path.exists() or file_digest(path) != metadata["head_sha256"]:
-            metadata = train_candidate(bank, training, development, root, task, statistics, execution.device, seed, seeds[0]["learning_rate"], seeds[0]["weight_decay"], path, targets=targets, features=features)
+            metadata = train_candidate(bank, training, development, root, task, statistics, execution.device, seed, seeds[0]["learning_rate"], seeds[0]["weight_decay"], path, targets=targets, features=features, progress=execution.progress)
             metadata["digest"] = digest(metadata)
             write_json(metadata_path, metadata, storage=bank.storage)
         seeds.append(metadata)
@@ -526,7 +534,7 @@ def evaluate_selection(selection, directory, bank, rows, root, task, execution):
         for seed in selection["seeds"]:
             probe = LinearProbe(selection["shape"][0], task["classes"], seed["seed"], execution.device)
             probe.load_state_dict(torch.load(Path(directory) / seed["head_file"], weights_only=True, map_location=execution.device))
-            result, observations = score(probe, bank, rows, root, task, statistics, execution.device, seed["seed"], targets=targets)
+            result, observations = score(probe, bank, rows, root, task, statistics, execution.device, seed["seed"], targets=targets, progress=execution.progress)
             results.append({**result, "seed": seed["seed"]})
             records.extend(observations)
     metrics = {task["metric"]: float(np.mean([result["score"] for result in results]))}

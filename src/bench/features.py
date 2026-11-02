@@ -19,6 +19,7 @@ from torch.utils.data import DataLoader, Dataset
 
 from .api import Extraction, ImageBatch, SpatialFeatures
 from .images import make_canvas
+from .progress import progress_bar
 from .storage import atomic_file, atomic_path, contained_path, digest, file_digest, read_json, remove, write_json
 
 
@@ -317,34 +318,36 @@ def build_bank(model, *, model_metadata, task, root, rows, work_dir, execution, 
     extracted_ids = []
     last_batch_finished = time.monotonic()
     timing = {"setup_seconds": last_batch_finished - started, "first_batch_seconds": 0.0, "first_batch_examples": 0, "steady_state_seconds": 0.0, "steady_state_examples": 0}
-    for images, valid, transforms, ids in loader:
-        device = execution.device
-        batch = ImageBatch(images.to(device, non_blocking=True), valid.to(device, non_blocking=True), transforms.to(device, non_blocking=True), ids)
-        tensors = extract(model, batch, task["method"], execution)
-        shape, dtype = list(tensors["values"].shape[1:]), str(tensors["values"].dtype)
-        if "shape" in manifest and (manifest["shape"] != shape or manifest["dtype"] != dtype):
-            raise ValueError("Adapter feature width, grid, or dtype changed within a bank")
-        if "bytes_per_sample" not in manifest:
-            per_sample = sum(value[0].numel() * value.element_size() for key, value in tensors.items() if key != "costs")
-            per_sample += sum(value[0].numel() * value.element_size() for value in tensors["costs"].values())
-            manifest.update(shape=shape, dtype=dtype, bytes_per_sample=per_sample)
-            estimate = storage_estimate(manifest, len(rows), task, execution.batch_size)
-            print(f"{task['id']} {task['method']}: estimated temporary storage {estimate['total_bytes']:,} bytes", flush=True)
-            if shutil.disk_usage(directory).free < estimate["total_bytes"]:
-                raise OSError(f"Insufficient temporary space for {task['id']}; need about {estimate['total_bytes']:,} bytes at {directory}")
-            write_json(path, {key: value for key, value in manifest.items() if key != "shards"}, storage=storage)
-        filename = f"shard-{len(manifest['shards']):06d}.safetensors"
-        save_features(directory / filename, tensors, storage=storage)
-        shard = {"file": filename, "sha256": file_digest(directory / filename), "ids": list(ids), "sample_digests": [requested[sample] for sample in ids]}
-        write_json((directory / filename).with_suffix(".json"), shard, storage=storage)
-        manifest["shards"].append(shard)
-        finished = time.monotonic()
-        stage = "first_batch" if current_examples == 0 else "steady_state"
-        timing[stage + "_seconds"] += finished - last_batch_finished
-        timing[stage + "_examples"] += len(ids)
-        last_batch_finished = finished
-        current_examples += len(ids)
-        extracted_ids.extend(ids)
+    with progress_bar(total=len(remaining), desc=f"{task['id']} extract", unit="image", enabled=False if preflight else execution.progress) as bar:
+        for images, valid, transforms, ids in loader:
+            device = execution.device
+            batch = ImageBatch(images.to(device, non_blocking=True), valid.to(device, non_blocking=True), transforms.to(device, non_blocking=True), ids)
+            tensors = extract(model, batch, task["method"], execution)
+            shape, dtype = list(tensors["values"].shape[1:]), str(tensors["values"].dtype)
+            if "shape" in manifest and (manifest["shape"] != shape or manifest["dtype"] != dtype):
+                raise ValueError("Adapter feature width, grid, or dtype changed within a bank")
+            if "bytes_per_sample" not in manifest:
+                per_sample = sum(value[0].numel() * value.element_size() for key, value in tensors.items() if key != "costs")
+                per_sample += sum(value[0].numel() * value.element_size() for value in tensors["costs"].values())
+                manifest.update(shape=shape, dtype=dtype, bytes_per_sample=per_sample)
+                estimate = storage_estimate(manifest, len(rows), task, execution.batch_size)
+                print(f"{task['id']} {task['method']}: estimated temporary storage {estimate['total_bytes']:,} bytes", flush=True)
+                if shutil.disk_usage(directory).free < estimate["total_bytes"]:
+                    raise OSError(f"Insufficient temporary space for {task['id']}; need about {estimate['total_bytes']:,} bytes at {directory}")
+                write_json(path, {key: value for key, value in manifest.items() if key != "shards"}, storage=storage)
+            filename = f"shard-{len(manifest['shards']):06d}.safetensors"
+            save_features(directory / filename, tensors, storage=storage)
+            shard = {"file": filename, "sha256": file_digest(directory / filename), "ids": list(ids), "sample_digests": [requested[sample] for sample in ids]}
+            write_json((directory / filename).with_suffix(".json"), shard, storage=storage)
+            manifest["shards"].append(shard)
+            finished = time.monotonic()
+            stage = "first_batch" if current_examples == 0 else "steady_state"
+            timing[stage + "_seconds"] += finished - last_batch_finished
+            timing[stage + "_examples"] += len(ids)
+            last_batch_finished = finished
+            current_examples += len(ids)
+            extracted_ids.extend(ids)
+            bar.update(len(ids))
     keep = {shard["file"] for shard in manifest["shards"]}
     keep |= {Path(filename).with_suffix(".json").name for filename in keep}
     for pattern in ("shard-*.safetensors", "shard-*.json"):

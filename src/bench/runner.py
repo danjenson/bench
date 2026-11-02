@@ -216,7 +216,7 @@ def run(model: VisionModel, *, names: list[str], evaluation="development", data_
                     images = sorted({row["id"]: row for row in distinct_images(scoring_rows) + training}.values(), key=lambda row: row["id"])
                     bank, usage = bank_for(images)
                     extraction_done = time.monotonic()
-                    metrics, supporting, records = evaluate_pairs(bank, scoring_rows, source, task)
+                    metrics, supporting, records = evaluate_pairs(bank, scoring_rows, source, task, progress=execution.progress)
                     task_result.update(supporting_metrics=supporting, diagnostics=feature_diagnostics(bank, manifest["diagnostic_sample_ids"]), sample_count=len(scoring_rows), extraction_costs=cost_summary(bank, images), extraction_usage=usage, feature_shape=bank.manifest["shape"], feature_dtype=bank.manifest["dtype"], probe_status="not_applicable")
                 else:
                     selection_digest = probe_identity(task, manifest, metadata)

@@ -56,7 +56,7 @@ These public data types are frozen dataclasses. Their field order and types are:
 | `ImageBatch` | `images: Tensor`, `valid_pixels: Tensor`, `image_to_original: Tensor`, `sample_ids: tuple[str, ...]` |
 | `SpatialFeatures` | `values: Tensor`, `grid_to_original: Tensor`, `extent_in_original: Tensor` |
 | `Extraction` | `features: Tensor \| SpatialFeatures`, `costs: dict[str, Tensor] \| None = None` |
-| `Execution` | `device: str = "cuda"`, `batch_size: int = 64`, `workers: int = 8`, `work_dir: Path \| None = None`, `numerics: Literal["bf16-v1", "fp32-v1"] = "fp32-v1"` |
+| `Execution` | `device: str = "cuda"`, `batch_size: int = 64`, `workers: int = 8`, `work_dir: Path \| None = None`, `numerics: Literal["bf16-v1", "fp32-v1"] = "fp32-v1"`, `progress: bool \| None = None` |
 | `RunResult` | `schema_version: str`, `status: Literal["running", "complete", "failed"]`, `metrics: dict[str, dict[str, float]]`, `output_dir: Path` |
 
 Frozen dataclasses prevent field reassignment; they do not recursively freeze
@@ -74,6 +74,16 @@ workspace under the output directory and `fp32-v1`. Extraction batch size does
 not change the probe's effective batch or training budget. CPU execution uses
 `Execution(device="cpu")`. BF16 is explicit and requires qualified parity for
 reference comparison; see [numerical-profiles.md](numerical-profiles.md).
+
+`progress=None` automatically shows transient tqdm Rich bars on an interactive
+stderr terminal and suppresses them in redirected logs. Set `progress=True` to
+force display or `progress=False` when the caller owns the display or measures
+latency. Bars report remaining extraction images, feature normalization, probe
+updates (with a validation label), scoring images and correspondence pairs.
+They close on success or failure and do not accumulate completed lines.
+Progress is a display setting, excluded from model, probe and result identities;
+end-to-end timings include any display overhead. Training cadence and metric
+logging remain caller-owned.
 
 ## Results and compatibility
 

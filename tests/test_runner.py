@@ -1,4 +1,5 @@
 import importlib
+from dataclasses import replace
 from pathlib import Path
 import subprocess
 import sys
@@ -73,6 +74,36 @@ def test_standalone_result_reuse_and_cleanup(clevr_data, tmp_path):
     assert repeated.metrics == result.metrics and model.calls == count
     with pytest.raises(ValueError, match="Conflicting run identity"):
         bench.run(model, names=["clevr-count"], evaluation="final", data_root=root, output_dir=output, execution=cpu_execution())
+
+
+def test_progress_preserves_scores_statistics_rng_and_result_reuse(clevr_data, tmp_path, capsys):
+    root, _ = clevr_data
+    prepare(names=["clevr-count"], data_root=root)
+    model = GlobalAdapter()
+    rng = torch.random.get_rng_state().clone()
+    reports, identities = [], []
+    for progress in (False, True):
+        output = tmp_path / str(progress)
+        capsys.readouterr()
+        bench.run(model, names=["clevr-count"], data_root=root, output_dir=output,
+                  execution=replace(cpu_execution(), progress=progress))
+        captured = capsys.readouterr()
+        assert ("clevr-count-v1" in captured.err) is progress
+        assert "\x1b" not in captured.out
+        assert torch.equal(rng, torch.random.get_rng_state())
+        assert not (output / ".work").exists()
+        reports.append(read_json(output / "results.json")["tasks"]["clevr-count-v1"])
+        identities.append(read_json(output / "manifest.json")["identity_digest"])
+    before, after = reports
+    assert before["metrics"] == after["metrics"]
+    assert before["statistics"] == after["statistics"]
+    assert before["selection"] == after["selection"]
+    assert identities[0] == identities[1]
+    calls = model.calls
+    repeated = bench.run(model, names=["clevr-count"], data_root=root, output_dir=output,
+                         execution=replace(cpu_execution(), progress=False))
+    assert repeated.metrics["clevr-count-v1"] == {name: metric["value"] for name, metric in after["metrics"].items()}
+    assert model.calls == calls
 
 
 @pytest.mark.parametrize("default_dtype", [torch.float16, torch.float64])

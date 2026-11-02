@@ -53,6 +53,7 @@ class Execution:
     workers: int = 8
     work_dir: Path | None = None
     numerics: Literal["bf16-v1", "fp32-v1"] = "fp32-v1"
+    progress: bool | None = None
 
 
 @dataclass(frozen=True)

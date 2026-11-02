@@ -62,7 +62,7 @@ The 1.0 interface evaluates frozen encoders under seven versioned task recipes. 
 (uv run bench visualize 'names=[imagenet-100,pascal]' 'data_root=~/datasets')
 ```
 
-Python 3.13 is retained. `uv.lock` pins the tested environment. The base stack contains PyTorch, torchvision, NumPy, Pillow, safetensors, and Hydra/OmegaConf; DINOv3 adds its adapter dependencies with `(uv sync --extra dinov3)`.
+Python 3.13 is retained. `uv.lock` pins the tested environment. The base stack contains PyTorch, torchvision, NumPy, Pillow, safetensors, Hydra/OmegaConf, tqdm and Rich; DINOv3 adds its adapter dependencies with `(uv sync --extra dinov3)`.
 
 Preparation indexes compatible local data in place. ImageNet requires an officially obtained tree with `train/<synset>/*.JPEG` and `val/<synset>/*.JPEG`. VOC2012, the ADE20K scene parsing challenge, SPair-71k, and CLEVR have archive acquisition recipes. Downloads are checksummed, extraction rejects links and escaping paths, and interrupted downloads can resume. Setup prints required space before acquisition and reports each requested task as ready or incomplete. An incomplete request exits with status 1 while retaining independent completed preparation.
 
@@ -128,6 +128,8 @@ Evaluation identities also include the runner and relevant scoring source. After
 FP32 is the default numerical profile. CPU execution uses `Execution(device="cpu")`. The explicit `bf16-v1` option requires a compatible CUDA device and qualified model/task parity for reference comparisons. Extraction batch size does not change the probe's effective batch, seed, or training budget.
 
 Use an explicit device such as `Execution(device="cuda:1")` to select a GPU, and place the adapter on that device. An unindexed `cuda` means the caller's current GPU. Evaluation restores the caller's current device afterward.
+
+Interactive runs show transient tqdm Rich progress bars for extraction, normalization, probe fitting and scoring. Redirected logs are quiet by default. Use `Execution(progress=False)` when your training UI owns the display or when measuring latency, and `progress=True` to force bars. The CLI uses the same setting, for example `(uv run bench model=resnet18 'names=[imagenet-100]' execution.progress=false)`. Progress does not change scores or cache identities; wall times include display overhead. Downstream code still owns evaluation scheduling and metric logging.
 
 Monitoring uses `fp32-v1` throughout. ImageNet-100 has 10,000 training images, 7,500 development images and 400 probe updates. PASCAL uses 1,024 training images, 256 development images, a 160-pixel canvas and 12,800 updates. Each monitoring task uses seed zero and final-update scoring. Full ImageNet-1K, ADE20K and CLEVR tasks use the documented development search, budget checks and three reporting seeds. SPair uses cosine matching without a fitted head. Monitoring and full tasks retain distinct identities and scores.
 
