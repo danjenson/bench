@@ -2,6 +2,8 @@
 
 from bisect import bisect_left
 from importlib.resources import files
+import hashlib
+import json
 import math
 
 from ..storage import contained_path, digest, file_digest, read_json
@@ -60,3 +62,79 @@ def index_imagenet(root, task):
         raise ValueError("The packaged ImageNet class-name mapping checksum does not match its source")
     mapping = {synset: name.replace("_", " ") for synset, name in read_json(mapping_path).values()}
     return partitions, [f"{mapping[synset]} ({synset})" for synset in classes]
+
+
+def apply_reimagenet(root, rows, task):
+    """Attach final-only targets from the pinned, caller-obtained annotations."""
+    protocol = task["final_labels"]
+    directory = root / "reimagenet"
+    contents, checksums = {}, {}
+    for name, pin in protocol["files"].items():
+        path = directory / name
+        if not path.is_file():
+            raise FileNotFoundError(f"ReImageNet requires {path}. Accept access at https://huggingface.co/datasets/vrg-prague/ReImageNet and download the three annotation files at revision {protocol['revision']} into {directory}.")
+        payload = path.read_bytes()
+        checksums[f"reimagenet/{name}"] = hashlib.sha256(payload).hexdigest()
+        if checksums[f"reimagenet/{name}"] != pin:
+            raise ValueError(f"ReImageNet checksum mismatch: {path}; expected release {protocol['revision']}")
+        contents[name] = payload
+    synsets = json.loads(contents["label_names.json"])
+    classes = sorted({row["synset"] for row in rows})
+    if not isinstance(synsets, list) or len(synsets) != task["classes"] or set(synsets) != set(classes):
+        raise ValueError("ReImageNet synsets must match the ImageNet class set exactly")
+    indices = {synset: index for index, synset in enumerate(classes)}
+    remap = [indices[synset] for synset in synsets]
+
+    def labels(values, *, uncertain=False):
+        if not isinstance(values, list) or any(type(value) is not int or not (-int(uncertain) <= value < len(synsets)) for value in values):
+            raise ValueError("Invalid ReImageNet class indices")
+        return {remap[value] for value in values if value >= 0}
+
+    equivalents = [{index} for index in range(len(classes))]
+    for pair in json.loads(contents["class_update_config.json"])["eq_classes"].values():
+        if not isinstance(pair, list) or len(pair) != 2:
+            raise ValueError("ReImageNet equivalent classes must be pairs")
+        group = set().union(*(equivalents[index] for index in labels(pair)))
+        for index in group:
+            equivalents[index] = group
+    expected = {row["image"].removeprefix("val/"): row for row in rows}
+    seen = set()
+    counts = {"eligible": 0, "no_valid_label": 0, "uncertain": 0}
+    for line in contents["reannotation.jsonl"].splitlines():
+        annotation = json.loads(line)
+        key = annotation["file_path"]
+        if key not in expected or key in seen or annotation["image_name"] != key.rsplit("/", 1)[-1]:
+            raise ValueError(f"Missing, duplicate, or mismatched ReImageNet image: {key}")
+        seen.add(key)
+        row = expected[key]
+        if row["target"] not in labels(annotation["original_class"]):
+            raise ValueError(f"ReImageNet original class disagrees with ImageNet source: {key}")
+        supplied = annotation["reannotated_labels"]
+        accepted = labels(supplied, uncertain=True)
+        status = "eligible" if accepted else "uncertain" if -1 in supplied else "no_valid_label"
+        row["accepted_labels"] = sorted(set().union(*(equivalents[index] for index in accepted))) if status == "eligible" else []
+        row["label_status"] = status
+        counts[status] += 1
+    if seen != set(expected):
+        raise ValueError(f"Incomplete ReImageNet annotations: expected {len(expected)}, found {len(seen)}")
+    if not counts["eligible"]:
+        raise ValueError("ReImageNet has no eligible final images")
+    return {"dataset": protocol["dataset"], "revision": protocol["revision"], "files": checksums, "counts": counts, "scoring": protocol["scoring"], "uncertain": protocol["uncertain"]}
+
+
+def classification_correct(record):
+    accepted = record.get("accepted_labels", [record["label"]])
+    return record["prediction"] in accepted if accepted else None
+
+
+def classification_score(records):
+    if not records or len({"accepted_labels" in row for row in records}) != 1:
+        raise ValueError("Classification records must use one consistent label protocol")
+    outcomes = [classification_correct(row) for row in records]
+    eligible = [value for value in outcomes if value is not None]
+    if not eligible:
+        raise ValueError("No eligible classification examples")
+    result = {"score": 100 * sum(eligible) / len(eligible), "eligible_count": len(eligible)}
+    if "accepted_labels" in records[0]:
+        result["original_top1"] = 100 * sum(row["prediction"] == row["label"] for row in records) / len(records)
+    return result

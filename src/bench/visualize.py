@@ -36,7 +36,8 @@ def select_examples(rows):
 def explain(task):
     canvas = task["canvas"]
     if task["source"] == "imagenet":
-        return f"The model receives a {canvas} × {canvas} center crop after resizing the shorter side to {task['resize_short']} pixels. A linear classifier learns from frozen global features and training labels. Top-1 accuracy is the percentage of images whose predicted class matches the annotation, over this recipe's {task['classes']}-class set."
+        scoring = "Top-1 accepts any ReImageNet label or equivalent class; images without known labels are excluded." if task.get("final_labels") else f"Top-1 requires the original label from this recipe's {task['classes']}-class set."
+        return f"The model receives a {canvas} × {canvas} center crop after resizing the shorter side to {task['resize_short']} pixels. A linear classifier learns from all official training images. Selection and reporting use the same official validation images. {scoring}"
     if task["kind"] == "segmentation":
         return f"The entire image is fitted into a {canvas} × {canvas} canvas with black padding. A shared linear pixel classifier learns from frozen spatial features and training masks. Logits are sampled geometrically with bilinear interpolation and border replication. Mean IoU is computed from the dataset confusion matrix; padding and official ignore regions contribute to neither training loss nor scoring."
     if task["kind"] == "correspondence":
@@ -132,7 +133,11 @@ def render_example(root, task, labels, row, annotation=None):
             caption = f"Closest camera depth {value:.4f}; bin {row['target']}: ({lower}, {thresholds[row['target']]}]."
     else:
         annotated = canvas.image.copy()
-        caption = f"Ground truth: {labels[row['target']]} (classifier target {row['target']}). Label trains the probe; it is never an encoder input."
+        if "accepted_labels" in row:
+            accepted = "; ".join(labels[index] for index in row["accepted_labels"]) or "None — excluded from primary accuracy"
+            caption = f"Accepted labels: {accepted}. Original label: {labels[row['target']]}. Validation labels select and score the probe; they never update its weights."
+        else:
+            caption = f"Validation label: {labels[row['target']]} (class {row['target']}). Used for selection and scoring, never an encoder input."
         original_marked = original.copy()
         corners = np.array([[0, 0, 1], [1, 1, 1]]) @ canvas.to_original.T
         box = (corners[:, :2] * original.size).reshape(-1)

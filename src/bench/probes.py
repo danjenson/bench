@@ -20,6 +20,7 @@ from .images import fit_pad_geometry, fit_pad_mask
 from .progress import progress_bar
 from .protocols import evaluation_source_digest
 from .storage import contained_path, digest, file_digest, read_json, remove, write_json
+from .tasks.classification import classification_score
 from .tasks.segmentation import read_mask
 
 
@@ -334,7 +335,11 @@ def score(probe, bank, rows, root, task, statistics, device, seed, targets=None,
                 total_loss += float(F.cross_entropy(logits, targets, reduction="sum"))
                 denominator += len(batch)
                 predictions = logits.argmax(1).cpu().tolist()
-                records.extend({"id": row["id"], "seed": seed, "label": row["target"], "prediction": prediction} for row, prediction in zip(batch, predictions))
+                for row, prediction in zip(batch, predictions):
+                    record = {"id": row["id"], "seed": seed, "label": row["target"], "prediction": prediction}
+                    if "accepted_labels" in row:
+                        record.update(accepted_labels=row["accepted_labels"], label_status=row["label_status"])
+                    records.append(record)
                 bar.update(len(batch))
         else:
             for row in rows:
@@ -351,8 +356,11 @@ def score(probe, bank, rows, root, task, statistics, device, seed, targets=None,
                 unions += union.cpu()
                 records.append({"id": row["id"], "seed": seed, "intersection": intersection.cpu().tolist(), "union": union.cpu().tolist(), "eligible_pixels": eligible, "prediction_sha256": hashlib.sha256(prediction.cpu().numpy().astype(np.uint8).tobytes()).hexdigest()})
                 bar.update(1)
-    metric = 100 * sum(record["label"] == record["prediction"] for record in records) / len(records) if task["kind"] == "classification" else miou(intersections, unions)
-    return {"score": metric, "loss": total_loss / denominator, "sample_count": len(rows), "eligible_count": denominator}, records
+    result = classification_score(records) if task["kind"] == "classification" else {"score": miou(intersections, unions), "eligible_count": denominator}
+    result.update(loss=total_loss / denominator, sample_count=len(rows))
+    if "original_top1" in result:
+        result["loss_label_set"] = "original-single-label-all-images"
+    return result, records
 
 
 def train_candidate(bank, rows, development, root, task, statistics, device, seed, learning_rate, weight_decay, destination, targets=None, features=None, *, progress=None):
@@ -540,4 +548,8 @@ def evaluate_selection(selection, directory, bank, rows, root, task, execution):
     metrics = {task["metric"]: float(np.mean([result["score"] for result in results]))}
     if len(results) > 1:
         metrics[task["metric"] + "_std"] = float(np.std([result["score"] for result in results], ddof=0))
+    if "original_top1" in results[0]:
+        metrics["original_top1"] = float(np.mean([result["original_top1"] for result in results]))
+        if len(results) > 1:
+            metrics["original_top1_std"] = float(np.std([result["original_top1"] for result in results]))
     return metrics, results, records

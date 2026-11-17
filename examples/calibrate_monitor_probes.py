@@ -278,6 +278,8 @@ def measure(model, *, names, data_root, output, execution, stage="budget-scale",
 
 def prepare_fuller_reference(data_root, task):
     """Prepare a larger training bank once, preserving monitoring evaluation data."""
+    if task["split_rule"] == "official-train-validation":
+        raise ValueError("This task already uses all official training images; fuller-bank calibration does not apply")
     data_root = resolve_path(data_root)
     reference = deepcopy(task)
     reference["id"] += "-fuller-bank-calibration-v1"

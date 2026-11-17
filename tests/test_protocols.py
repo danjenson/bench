@@ -5,6 +5,20 @@ from omegaconf import OmegaConf
 from bench import protocols
 
 
+def test_imagenet_full_data_recipes_do_not_reserve_or_subsample_training():
+    from bench.prepare import split_samples
+
+    source = {"train": [{"id": f"train-{i}", "target": i % 2} for i in range(9)],
+              "final": [{"id": f"val-{i}", "target": i % 2} for i in range(5)]}
+    for task in protocols.resolve_names(["imagenet-100", "imagenet-1k"]):
+        assert task["split_rule"] == "official-train-validation"
+        assert task["development_fraction"] is None and "bank" not in task
+        rows = split_samples(source, task)
+        assert rows["train"] == source["train"]
+        assert rows["development"] == rows["final"] == source["final"]
+        assert {row["id"] for row in rows["train"]}.isdisjoint(row["id"] for row in rows["final"])
+
+
 def test_api_and_cli_default_to_fp32_after_bf16_parity_failures():
     from bench import Execution
 

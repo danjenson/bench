@@ -15,6 +15,9 @@ def historical_monitor_recipes(monkeypatch):
     declared = deepcopy(module.recipes())
     for name, canvas, rate, decay in [("imagenet-100", 224, .003, 0.), ("pascal", 512, .001, .01)]:
         task = declared[name]
+        if name == "imagenet-100":
+            task.update(id="imagenet100-linear-v1", split_rule="sha256-of-seed-and-source-id-order", development_fraction=0.1,
+                        bank={"train_per_class": 100, "development_per_class": 75, "final_per_class": 50})
         task["canvas"] = canvas
         task["probe"].update(updates=100, learning_rates=[rate], weight_decays=[decay])
         task["digest"] = digest({key: value for key, value in task.items() if key != "digest"})

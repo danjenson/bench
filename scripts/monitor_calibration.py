@@ -26,6 +26,8 @@ from bench.storage import contained_path, digest, file_digest, read_json, write_
 
 
 def fuller_task(task):
+    if task['split_rule'] == 'official-train-validation':
+        raise ValueError('This task already uses all official training images; fuller-bank calibration does not apply')
     reference = deepcopy(task)
     reference['id'] += '-fuller-bank-calibration-v1'
     reference['release_status'] = 'calibration-only'

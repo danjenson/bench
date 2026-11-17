@@ -72,8 +72,8 @@ def run(model: VisionModel, *, names: list[str], evaluation="development", data_
         stack.enter_context(workspace_lock(work))
         metadata = model_identity(model, execution)
         prepared = {}
-        # Only training and development files are inspected before probe selection.
-        # Final source data is opened after a completed selection exists.
+        # ImageNet development means official validation, also used for reporting.
+        # Other tasks keep separate development and final examples.
         for task in tasks:
             if task["kind"] == "correspondence":
                 manifest, rows = load_prepared(root, task, "development")
@@ -157,8 +157,8 @@ def run(model: VisionModel, *, names: list[str], evaluation="development", data_
                 context = digest({key: value for key, value in feature_identity(metadata, task, []).items() if key != "samples"})
                 plan = planned_banks.setdefault(context, {"ids": set(), "final_count": 0, "metadata": shape_metadata, "task": task})
                 plan["ids"].update(row["id"] for row in rows)
-                if evaluation == "final" and task["kind"] != "correspondence":
-                    # Counts are available without opening held-out examples before selection.
+                if evaluation == "final" and task["kind"] != "correspondence" and not (task["split_rule"] == "official-train-validation" and selection is None):
+                    # Shared validation features are already counted during fitting.
                     plan["final_count"] += manifest["splits"]["final"]["count"]
                 planned_probes += storage_estimate(shape_metadata, 0, task, execution.batch_size)["probe_bytes"]
             estimated_banks, atomic_overhead = 0, 0
@@ -181,7 +181,9 @@ def run(model: VisionModel, *, names: list[str], evaluation="development", data_
                 manifest, training, development = prepared[identifier]
                 source = Path(manifest["source_root"])
                 task_result = {"status": "running", "evaluation": evaluation, "task_digest": task["digest"], "preparation_digest": manifest["digest"], "data_digest": manifest["splits"][evaluation]["digest"], "release_status": task["release_status"], "method": task["method"], "readout": model.info.readouts[task["method"]], "model_identity": metadata["digest"], "extraction_digests": [], "extraction_work": [], "extraction_seconds": 0.0}
-                task_result["preparation"] = {"source": manifest["source"], "source_root": manifest["source_root"], "splits": {split: {key: value for key, value in entry.items() if key != "file"} for split, entry in manifest["splits"].items()}}
+                task_result["preparation"] = {"source": manifest["source"], "source_root": manifest["source_root"], "split_rule": task["split_rule"], "splits": {split: {key: value for key, value in entry.items() if key != "file"} for split, entry in manifest["splits"].items()}}
+                if "final_labels" in manifest:
+                    task_result["preparation"]["final_labels"] = manifest["final_labels"]
                 result["tasks"][identifier] = task_result
                 write_json(output / "results.json", result)
 

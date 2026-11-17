@@ -1,5 +1,11 @@
 # v1.0.0 verification
 
+This ledger describes the original released recipes. The later
+`imagenet100-full-linear-v1` and `imagenet1k-reimagenet-full-linear-v1` recipes
+change split membership and, for ImageNet-1K, selection labels. Their scientific
+reference scores, latency and probe-budget qualification have not been rerun.
+The historical evidence below remains bound to its recorded task IDs.
+
 The released scope contains seven fixed task recipes and fourteen development
 references for official pretrained torchvision ResNet18 and ViT-B/16. All sixteen
 positive/weak calibration controllers and twenty-four reporting seeds complete.

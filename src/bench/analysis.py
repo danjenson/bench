@@ -7,6 +7,7 @@ import numpy as np
 from .runner import read_result
 from .protocols import resolve_names
 from .storage import contained_path, digest, read_json
+from .tasks.classification import classification_correct, classification_score
 
 
 def numerical_parity(first, second, task_id):
@@ -42,20 +43,24 @@ def numerical_parity(first, second, task_id):
     expected = {(sample, seed) for sample in ids for seed in seeds}
     if not ids or len(ids) != tasks[0]["sample_count"] or any(set(index) != expected or len(index) != len(rows) for index, rows in zip(indices, records)):
         raise ValueError("Numerical parity requires identical source samples and every prescribed probe seed exactly once")
-    fixed_fields = {"classification": ("label",), "segmentation": ("eligible_pixels",), "correspondence": ("source_id", "target_id", "eligible", "breakdown")}[recipe["kind"]]
+    fixed_fields = {"classification": ("label", "accepted_labels"), "segmentation": ("eligible_pixels",), "correspondence": ("source_id", "target_id", "eligible", "breakdown")}[recipe["kind"]]
     for sample in ids:
         reference = indices[0][sample, seeds[0]]
         for index in indices:
             for seed in seeds:
-                if any(index[sample, seed][key] != reference[key] for key in fixed_fields):
+                if any(index[sample, seed].get(key) != reference.get(key) for key in fixed_fields):
                     raise ValueError("Numerical parity requires matching labels and scoring eligibility")
     scores, profile_seed_scores = [], []
     for task, index in zip(tasks, indices):
         seed_scores = []
+        original_scores = []
         for seed in seeds:
             rows = [index[sample, seed] for sample in sorted(ids)]
             if recipe["kind"] == "classification":
-                seed_scores.append(100 * sum(row["label"] == row["prediction"] for row in rows) / len(rows))
+                scored = classification_score(rows)
+                seed_scores.append(scored["score"])
+                if "original_top1" in scored:
+                    original_scores.append(scored["original_top1"])
             elif recipe["kind"] == "segmentation":
                 counts = np.array([[row["intersection"], row["union"]] for row in rows], dtype=float)
                 if counts.shape != (len(rows), 2, recipe["classes"]) or not np.isfinite(counts).all() or (counts < 0).any() or (counts[:, 0] > counts[:, 1]).any():
@@ -72,6 +77,10 @@ def numerical_parity(first, second, task_id):
         metrics = {recipe["metric"]: float(np.mean(seed_scores))}
         if len(seeds) > 1:
             metrics[recipe["metric"] + "_std"] = float(np.std(seed_scores))
+        if original_scores:
+            metrics["original_top1"] = float(np.mean(original_scores))
+            if len(seeds) > 1:
+                metrics["original_top1_std"] = float(np.std(original_scores))
         if recipe["kind"] == "correspondence":
             metrics["grid_limited_pck_ceiling"] = 100 * sum(row["grid_ceiling_correct"] for row in rows) / eligible
         if set(metrics) != set(task["metrics"]) or any(not np.isclose(value, task["metrics"][name]["value"], rtol=0, atol=1e-9) for name, value in metrics.items()):
@@ -120,12 +129,15 @@ def paired_contrast(outputs, coefficients, task_id, *, replicates=2000, seed=0):
         raise ValueError("Paired statistics must contain each source-image/probe-seed observation exactly once")
     classification = "label" in records[0][0]
     if classification:
-        arrays = [np.array([[index[sample, seed]["prediction"] == index[sample, seed]["label"] for seed in seeds] for sample in ids], dtype=float) for index in indices]
-        labels = [indices[0][sample, seeds[0]]["label"] for sample in ids]
         for sample in ids:
             for probe_seed in seeds:
-                if any(indices[0][sample, probe_seed]["label"] != index[sample, probe_seed]["label"] for index in indices[1:]):
+                if any(any(index[sample, probe_seed].get(key) != indices[0][sample, seeds[0]].get(key) for key in ("label", "accepted_labels")) for index in indices):
                     raise ValueError("Paired labels differ")
+        ids = [sample for sample in ids if classification_correct(indices[0][sample, seeds[0]]) is not None]
+        if not ids:
+            raise ValueError("No eligible classification examples")
+        arrays = [np.array([[classification_correct(index[sample, seed]) for seed in seeds] for sample in ids], dtype=float) for index in indices]
+        labels = [indices[0][sample, seeds[0]]["label"] for sample in ids]
 
         def metric(array, selection):
             return float(array[selection].mean() * 100)

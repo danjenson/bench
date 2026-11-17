@@ -11,6 +11,7 @@ from bench.prepare import load_prepared
 from bench.protocols import resolve_names
 from bench.runner import read_result
 from bench.storage import contained_path, digest, file_digest, read_json, write_json
+from bench.tasks.classification import classification_score
 
 
 def reconstruct(task, result, records, rows):
@@ -20,13 +21,17 @@ def reconstruct(task, result, records, rows):
     index = {(r['id'], r.get('seed')): r for r in records}
     assert len(index) == len(records) and set(index) == {(sample, seed) for sample in ids for seed in seeds}
     scores = []
+    original_scores = []
     for seed in seeds:
         selected = [index[sample, seed] for sample in ids]
         if task['kind'] == 'classification':
             assert [r['label'] for r in selected] == [row['target'] for row in rows]
             assert all(type(r['prediction']) is int and 0 <= r['prediction'] < task['classes'] for r in selected)
-            score = 100 * sum(r['prediction'] == r['label'] for r in selected) / len(ids)
-            eligible = len(ids)
+            assert [r.get('accepted_labels') for r in selected] == [row.get('accepted_labels') for row in rows]
+            scored = classification_score(selected)
+            score, eligible = scored['score'], scored['eligible_count']
+            if 'original_top1' in scored:
+                original_scores.append(scored['original_top1'])
         elif task['kind'] == 'segmentation':
             classes = task['classes']
             assert all(type(r['eligible_pixels']) is int and r['eligible_pixels'] >= 0 for r in selected)
@@ -54,6 +59,10 @@ def reconstruct(task, result, records, rows):
     metrics = {task['metric']: float(np.mean(scores))}
     if len(seeds) > 1:
         metrics[task['metric'] + '_std'] = float(np.std(scores))
+    if original_scores:
+        metrics['original_top1'] = float(np.mean(original_scores))
+        if len(seeds) > 1:
+            metrics['original_top1_std'] = float(np.std(original_scores))
     if task['kind'] == 'correspondence':
         metrics['grid_limited_pck_ceiling'] = 100 * sum(r['grid_ceiling_correct'] for r in selected) / eligible
     assert set(metrics) == set(result['metrics'])

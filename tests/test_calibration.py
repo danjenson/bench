@@ -229,7 +229,8 @@ def test_fuller_reference_expands_only_training_and_reuses_preparation(name, sta
     if name == "imagenet-100":
         task.pop("class_list")
         task.pop("class_list_sha256")
-        task.update(classes=2, bank={"train_per_class": 3, "development_per_class": 2, "final_per_class": 2})
+        task.update(classes=2, split_rule="sha256-of-seed-and-source-id-order", development_fraction=0.1,
+                    bank={"train_per_class": 3, "development_per_class": 2, "final_per_class": 2})
         for split, count in [("train", 8), ("val", 3)]:
             for synset in ["n01440764", "n01443537"]:
                 directory = source / split / synset

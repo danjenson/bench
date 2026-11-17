@@ -115,20 +115,18 @@ correspondence:
   metric_aggregation: pooled-eligible-correspondences
 tasks:
   imagenet-100:
-    id: imagenet100-linear-v1
+    id: imagenet100-full-linear-v1
     source: imagenet
     kind: classification
     classes: 100
     transform: resize-center-crop
     resize_short: 256
+    split_rule: official-train-validation
+    development_fraction: null
     metric: top1
     class_list: imagenet100.txt
     class_list_sha256: 79f3f1552ccc478ce24bd934b4573625db584ddc1f4643ae23c994a94cb11397
     reference: HobbitLong/CMC@7b227be0b10ef4e526c72af07664f5079ed9ee09/imagenet100.txt
-    bank:
-      development_per_class: 75
-      final_per_class: 50
-      train_per_class: 100
     probe:
       amsgrad: false
       batch_size: 1024
@@ -159,13 +157,24 @@ tasks:
       - 1.0
     canvas: 224
   imagenet-1k:
-    id: imagenet1k-linear-v1
+    id: imagenet1k-reimagenet-full-linear-v1
     source: imagenet
     kind: classification
     classes: 1000
     transform: resize-center-crop
     resize_short: 256
+    split_rule: official-train-validation
+    development_fraction: null
     metric: top1
+    final_labels:
+      dataset: vrg-prague/ReImageNet
+      revision: f0bcc5f82c0b6011cfe833590bce9019484c20f1
+      scoring: top1-in-equivalence-expanded-accepted-labels
+      uncertain: ignore-minus-one-exclude-if-no-known-label
+      files:
+        reannotation.jsonl: e25897e79ce5bf0e47a1593e702b75cba70b8409861f93e94af6f47f7d7f91ea
+        label_names.json: 5e738e464c43c92037bbb4252eeb6ba2c306091861443ae7e182e28c9662324e
+        class_update_config.json: eba57cc4ef6fbe5cb24262605db962b7206d3ca67b7796c63c516193877f5720
     probe:
       amsgrad: false
       batch_size: 1024

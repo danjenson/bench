@@ -9,12 +9,17 @@ from PIL import Image
 from .acquisition import acquire, source_recipes
 from .protocols import prepare_command, resolve_names
 from .storage import contained_path, digest, file_digest, lock, read_json, resolve_path, write_json
-from .tasks.classification import index_clevr, index_imagenet
+from .tasks.classification import apply_reimagenet, index_clevr, index_imagenet
 from .tasks.correspondence import distinct_images, index_spair
 from .tasks.segmentation import index_segmentation, read_mask
 
 
 def split_samples(partitions, task):
+    if task["split_rule"] == "official-train-validation":
+        # Selection and reporting use the same official validation images.
+        # Keep independent row dictionaries until source validation is complete.
+        return {split: sorted((dict(row) for row in partitions[source]), key=lambda row: row["id"])
+                for split, source in (("train", "train"), ("development", "final"), ("final", "final"))}
     if "development" in partitions:
         return {split: sorted(rows, key=lambda row: row["id"]) for split, rows in partitions.items()}
     groups = defaultdict(list)
@@ -81,8 +86,12 @@ def validated_partitions(source_root, task, source, inventory):
     partitions = split_samples(partitions, task)
     if task["kind"] != "correspondence":
         seen = set()
-        for rows in partitions.values():
+        for split, rows in partitions.items():
             ids = {row["id"] for row in rows}
+            if task["split_rule"] == "official-train-validation" and split == "final":
+                if ids != {row["id"] for row in partitions["development"]}:
+                    raise ValueError("Official validation must be identical for selection and reporting")
+                continue
             if seen & ids:
                 raise ValueError(f"Overlapping partitions in {task['id']}")
             seen.update(ids)
@@ -100,6 +109,9 @@ def validated_partitions(source_root, task, source, inventory):
 
 def build_manifest(data_root, source_root, task, source, inventory):
     partitions, labels = validated_partitions(source_root, task, source, inventory)
+    final_labels = apply_reimagenet(source_root, partitions["final"], task) if task.get("final_labels") else None
+    if final_labels is not None and task["split_rule"] == "official-train-validation":
+        partitions["development"] = [dict(row) for row in partitions["final"]]
     directory = data_root / ".bench" / "prepared" / task["id"]
     splits = {}
     for split, rows in partitions.items():
@@ -111,6 +123,8 @@ def build_manifest(data_root, source_root, task, source, inventory):
         splits[split] = {"file": filename, "digest": split_digest, "count": len(rows)}
     diagnostic_rows = distinct_images(partitions["train"]) if task["kind"] == "correspondence" else partitions["train"]
     manifest = {"schema_version": "1.0.0", "task": task, "source": source, "labels": labels, "splits": splits, "diagnostic_sample_ids": [row["id"] for row in diagnostic_rows[:task["diagnostics"]["maximum_images"]]]}
+    if final_labels is not None:
+        manifest["final_labels"] = final_labels
     manifest["digest"] = digest(manifest)
     manifest["source_root"] = str(source_root)
     write_json(directory / "manifest.json", manifest)
@@ -183,6 +197,10 @@ def load_prepared(data_root, task, split, *, verify=True):
             raise ValueError(f"Corrupt {split} sample manifest")
         source_root = Path(manifest["source_root"])
         if verify:
+            if split == "final" or split == "development" and task["split_rule"] == "official-train-validation":
+                for relative, expected in manifest.get("final_labels", {}).get("files", {}).items():
+                    if file_digest(contained_path(source_root, relative)) != expected:
+                        raise ValueError(f"ReImageNet source checksum changed: {relative}")
             inventory_path = root / ".bench" / "sources" / f"{task['source']}.json"
             inventory = read_json(inventory_path)["files"]
             checked = set()

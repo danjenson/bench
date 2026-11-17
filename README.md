@@ -74,6 +74,57 @@ Dataset paths can be set explicitly during preparation:
 
 The prepared manifests record those source locations, which evaluation then uses. `~` and relative paths are resolved against the caller's environment. No source images are copied into task manifests. Setup and visualization require neither a model nor CUDA and do not import PyTorch. The visualization command writes a standalone `index.html`, local annotated PNGs, and a selection manifest, using only development examples.
 
+## ImageNet full-data protocol
+
+Both ImageNet tasks fit probes on every official training image. The official
+validation set serves both selection (`evaluation="development"`) and reporting
+(`evaluation="final"`); there is no training holdout or independent final test set.
+
+| Alias | Task ID | Training | Selection and reporting |
+| --- | --- | ---: | ---: |
+| `imagenet-100` | `imagenet100-full-linear-v1` | 126,689 | 5,000 |
+| `imagenet-1k` | `imagenet1k-reimagenet-full-linear-v1` | 1,281,167 | 50,000 |
+
+ImageNet-1K uses [ReImageNet](https://huggingface.co/datasets/vrg-prague/ReImageNet)
+revision `f0bcc5f82c0b6011cfe833590bce9019484c20f1` for probe selection and primary
+validation reporting. Training retains original ImageNet labels. ImageNet-100
+uses original labels throughout. The inputs remain 224px center crops after a
+256px shorter-side resize. Optimizers and probe budgets are unchanged; this
+adopts the full-data split convention, not a different linear-probe recipe.
+
+Accept the dataset's access conditions and authenticate locally, then place
+the annotations inside your ImageNet tree:
+
+```nu
+(uvx hf auth login)
+(uvx hf download vrg-prague/ReImageNet reannotation.jsonl label_names.json class_update_config.json --repo-type dataset --revision f0bcc5f82c0b6011cfe833590bce9019484c20f1 --local-dir ~/datasets/imagenet/reimagenet)
+(uv run bench prepare 'names=[imagenet-100,imagenet-1k]' 'data_root="~/datasets"')
+```
+
+Preparation verifies all three file checksums, remaps class indices by synset,
+and requires exactly one annotation per validation image. Both selection and
+reporting `top1` accept any
+reannotated class, including the pinned equivalent-class pairs. The `-1`
+uncertainty marker is ignored; images with no known accepted class are excluded.
+For this release, 47,984 images are eligible, 1,516 have empty annotations, and
+500 have only uncertain labels. Known labels on 588 partially uncertain images
+remain eligible. No boxes or labels are passed to the encoder.
+
+`original_top1` preserves exact original-label accuracy over all 50,000 images;
+it therefore has a different denominator and does not expand equivalent classes.
+Both metrics include seed standard deviations. Per-seed `loss` remains original
+single-label CE over all images, explicitly marked by `loss_label_set`.
+Statistics retain original labels, accepted labels, exclusions and predictions.
+The preparation/result provenance records annotation revision, SHA256 checksums
+and eligibility counts. Paired analyses use eligible images and all probe seeds.
+
+Reprepare data and use a new output directory after migrating. The new task IDs
+keep old preparations and results separate. Historical `imagenet100-linear-v1`,
+`imagenet1k-linear-v1` and `imagenet1k-reimagenet-linear-v1` results retain their
+original meaning. Packaged ImageNet reference scores and monitoring measurements
+have not been rerun for the full-data recipes and do not qualify their accuracy,
+latency or probe budgets.
+
 ## Supported reference models
 
 Supported benchmark references must have an established public checkpoint or model release with documented upstream validation, loading and preprocessing. The current reference architectures are torchvision ResNet18 and ViT-B/16 with official ImageNet weights. The DINOv3 adapter targets official public releases; each exact local checkpoint still requires qualification. Private or experimental model studies are outside the supported set and release requirements. See [the reference model policy](docs/reference-models.md).
@@ -131,9 +182,9 @@ Use an explicit device such as `Execution(device="cuda:1")` to select a GPU, and
 
 Interactive runs show transient tqdm Rich progress bars for extraction, normalization, probe fitting and scoring. Redirected logs are quiet by default. Use `Execution(progress=False)` when your training UI owns the display or when measuring latency, and `progress=True` to force bars. The CLI uses the same setting, for example `(uv run bench model=resnet18 'names=[imagenet-100]' execution.progress=false)`. Progress does not change scores or cache identities; wall times include display overhead. Downstream code still owns evaluation scheduling and metric logging.
 
-Monitoring uses `fp32-v1` throughout. ImageNet-100 has 10,000 training images, 7,500 development images and 400 probe updates. PASCAL uses 1,024 training images, 256 development images, a 160-pixel canvas and 12,800 updates. Each monitoring task uses seed zero and final-update scoring. Full ImageNet-1K, ADE20K and CLEVR tasks use the documented development search, budget checks and three reporting seeds. SPair uses cosine matching without a fitted head. Monitoring and full tasks retain distinct identities and scores.
+Monitoring uses `fp32-v1` throughout. ImageNet-100 now has 126,689 training images, 5,000 official validation images and 400 probe updates. PASCAL uses 1,024 training images, 256 development images, a 160-pixel canvas and 12,800 updates. Each monitoring task uses seed zero and final-update scoring. ImageNet-1K, ADE20K and CLEVR tasks use the documented selection search, budget checks and three reporting seeds. SPair uses cosine matching without a fitted head. ImageNet-100 and ImageNet-1K retain distinct identities and scores.
 
-Scientific acceptance retains all paired intervals and half-widths, with no absolute width cap. Meaningful fuller-reference changes are two top-1 points or one mIoU point with an interval excluding zero. At least 90% of qualifying directions must also be confidently detected by monitoring, with at least three qualifying pairs covering CNN and ViT. Protected development and six prospectively reserved checkpoints pass the declared tests; all five fresh qualifying directions agree for each task. These findings describe the declared adapters and checkpoints.
+Historical monitoring acceptance retains all paired intervals and half-widths, with no absolute width cap. Meaningful fuller-reference changes are two top-1 points or one mIoU point with an interval excluding zero. At least 90% of qualifying directions must also be confidently detected by monitoring, with at least three qualifying pairs covering CNN and ViT. Protected development and six prospectively reserved checkpoints pass the declared tests; all five fresh qualifying directions agree for each task. These findings describe the declared adapters, checkpoints and original sample banks, including ImageNet-100's former 10,000/7,500 split.
 
 Measured standalone two-task calls take 112.49–116.27 seconds for the declared ModelZoo CIFAR ResNet18 and LAION CLIP ViT-B/14 adapters. The qualified official torchvision CNN implementation takes 79.77–91.39 seconds over three fresh calls; one official ViT call takes 116.58 seconds. Earlier failed candidates remain in the acceptance ledger. Actual matched training overhead is 3.67% for the declared CNN setup and 3.45% for ViT, with the specified optimizer-step cadences. Those timing and overhead measurements retain their source, adapter, data, hardware and cadence scope; measure your own training integration.
 

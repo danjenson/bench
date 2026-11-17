@@ -50,6 +50,8 @@ def evaluation_source_digest(task):
         sources.append('probe_search.py')
     if task["kind"] == "segmentation":
         sources.extend(["geometry.py", "images.py", "tasks/segmentation.py"])
+    if task["kind"] == "classification":
+        sources.append("tasks/classification.py")
     root = Path(__file__).parent
     return digest({name: file_digest(root / name) for name in sources})
 

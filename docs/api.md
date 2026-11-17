@@ -30,6 +30,23 @@ preflight. `evaluation` is `"development"` or `"final"`. The caller supplies
 the adapter on the requested device. `run` uses the prepared datasets and never
 downloads them. It fits probes on frozen features; it does not train the encoder.
 
+ImageNet-100 (`imagenet100-full-linear-v1`) and ImageNet-1K
+(`imagenet1k-reimagenet-full-linear-v1`) use all official training images. Their
+`development` and `final` roles contain the same official validation images;
+final reporting is not an independent test. `preparation.split_rule` records
+`official-train-validation`. ImageNet-100 uses original labels.
+
+ImageNet-1K selects probes and reports primary `top1` by membership in the
+equivalence-expanded ReImageNet accepted labels, excluding images without a
+known target. `original_top1` separately scores the original label over all validation
+images. Their `_std` metrics describe variation over probe seeds. Retained
+classification records add `accepted_labels` and `label_status` on both evaluation
+roles; an empty accepted set is excluded from the primary metric and paired
+bootstrap. The result's `preparation.final_labels` records the pinned release,
+file SHA256 hashes and eligibility counts; `seed_results[].eligible_count`
+records the primary denominator. Per-seed CE `loss` still uses original labels,
+with `loss_label_set` documenting this. See the README for annotation acquisition.
+
 ## Adapter and data types
 
 `VisionModel` is a `torch.nn.Module` with a `ModelInfo` in `info` and one or both

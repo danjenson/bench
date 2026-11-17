@@ -12,30 +12,30 @@ def test_paired_contrasts_group_repeated_probe_seeds(tmp_path):
     for index, path in enumerate(paths):
         rows = [{"id": str(image), "seed": seed, "label": image % 2, "prediction": image % 2 if index == 1 else 1 - image % 2} for image in range(10) for seed in (0, 1)]
         write_json(path / "statistics.json", {"records": rows})
-        write_json(path / "results.json", {"schema_version": "1.0.0", "numerics": "fp32-v1", "tasks": {"imagenet100-linear-v1": {"status": "complete", "task_digest": "same", "preparation_digest": "same", "evaluation": "development", "metrics": {"top1": {}}, "statistics": {"file": "statistics.json", "sha256": file_digest(path / "statistics.json")}}}})
-    result = paired_difference(paths[0], paths[1], "imagenet100-linear-v1", replicates=50)
+        write_json(path / "results.json", {"schema_version": "1.0.0", "numerics": "fp32-v1", "tasks": {"imagenet100-full-linear-v1": {"status": "complete", "task_digest": "same", "preparation_digest": "same", "evaluation": "development", "metrics": {"top1": {}}, "statistics": {"file": "statistics.json", "sha256": file_digest(path / "statistics.json")}}}})
+    result = paired_difference(paths[0], paths[1], "imagenet100-full-linear-v1", replicates=50)
     assert result["difference_percentage_points"] == 100
     assert result["paired_95_interval"] == [100, 100]
     assert result["source_images"] == 10 and result["probe_seeds"] == [0, 1]
     assert result["stratified"]
-    interaction = paired_contrast([paths[1], paths[0], paths[1], paths[2]], [1, -1, -1, 1], "imagenet100-linear-v1", replicates=50)
+    interaction = paired_contrast([paths[1], paths[0], paths[1], paths[2]], [1, -1, -1, 1], "imagenet100-full-linear-v1", replicates=50)
     assert interaction["paired_95_interval"] == [0, 0]
     for path in paths:
         artifact = read_json(path / "results.json")
         artifact.update(schema_version="1.1.0", future_metadata={"note": "additive field"})
-        artifact["tasks"]["imagenet100-linear-v1"]["future_metadata"] = {"note": "additive task field"}
+        artifact["tasks"]["imagenet100-full-linear-v1"]["future_metadata"] = {"note": "additive task field"}
         write_json(path / "results.json", artifact)
-    assert paired_difference(paths[0], paths[1], "imagenet100-linear-v1", replicates=50) == result
+    assert paired_difference(paths[0], paths[1], "imagenet100-full-linear-v1", replicates=50) == result
     artifact = read_json(paths[0] / "results.json")
     artifact["schema_version"] = "2.0.0"
     write_json(paths[0] / "results.json", artifact)
     with pytest.raises(ValueError, match="Unsupported result schema"):
-        paired_difference(paths[0], paths[1], "imagenet100-linear-v1")
+        paired_difference(paths[0], paths[1], "imagenet100-full-linear-v1")
     artifact["schema_version"] = "1.1.0"
     write_json(paths[0] / "results.json", artifact)
     (paths[1] / "statistics.json").write_text('{}')
     with pytest.raises(ValueError, match="corrupt committed statistics"):
-        paired_difference(paths[0], paths[1], "imagenet100-linear-v1")
+        paired_difference(paths[0], paths[1], "imagenet100-full-linear-v1")
 
 
 def profile_results(root, name, records, metrics):
@@ -60,9 +60,9 @@ def test_numerical_parity_uses_registered_tolerance_and_keeps_profiles_separate(
     assert report["tolerance_percentage_points"] == .1
     assert report["metrics"]["top1"]["absolute_difference"] == pytest.approx(extra_correct / 10)
     assert report["sample_count"] == 1000 and report["probe_seeds"] == [0]
-    assert numerical_parity(*reversed(outputs), "imagenet100-linear-v1") == report
+    assert numerical_parity(*reversed(outputs), "imagenet100-full-linear-v1") == report
     with pytest.raises(ValueError, match="same numerical profile"):
-        paired_difference(*outputs, "imagenet100-linear-v1")
+        paired_difference(*outputs, "imagenet100-full-linear-v1")
     with pytest.raises(ValueError, match="one fp32-v1 and one bf16-v1"):
         numerical_parity(outputs[0], outputs[0], "imagenet-100")
 
@@ -101,7 +101,7 @@ def test_numerical_parity_rejects_unmatched_or_inconsistent_results(tmp_path, ch
     outputs = profile_results(tmp_path, "imagenet-100", [records, records], [{"top1": 100}, {"top1": 100}])
     output = outputs[1]
     result = read_json(output / "results.json")
-    task = result["tasks"]["imagenet100-linear-v1"]
+    task = result["tasks"]["imagenet100-full-linear-v1"]
     if change in ("state", "recipe", "model-digest"):
         model = result["model"]
         if change == "recipe":

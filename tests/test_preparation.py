@@ -67,7 +67,7 @@ def test_missing_manual_source_does_not_block_independent_task(clevr_data):
     report = prepare(names=["imagenet-100", "clevr-count"], data_root=root)
     assert not report["ready"]
     assert report["tasks"]["clevr-count-v1"]["status"] == "ready"
-    message = report["tasks"]["imagenet100-linear-v1"]["error"]
+    message = report["tasks"]["imagenet100-full-linear-v1"]["error"]
     assert "https://www.image-net.org/download.php" in message
     assert str(root / "imagenet") in message
 
