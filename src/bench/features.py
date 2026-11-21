@@ -122,7 +122,7 @@ def supplied_extent(batch):
     return torch.stack(extents)
 
 
-def extract(model, batch, method, execution):
+def extract(model, batch, method, execution, *, output_device="cpu"):
     with adapter_mode(model):
         autocast = torch.autocast(torch.device(execution.device).type, dtype=torch.bfloat16, enabled=execution.numerics == "bf16-v1")
         with torch.inference_mode(), autocast:
@@ -142,7 +142,7 @@ def extract(model, batch, method, execution):
         if values.shape[0] != batch_size or any(size < 1 for size in values.shape) or not values.is_floating_point() or not torch.isfinite(values).all():
             raise ValueError(f"Invalid encode_{method} feature shape or nonfinite values")
         # Clone outside inference mode: detached inference tensors cannot train a head.
-        result = {"values": values.detach().cpu().clone()}
+        result = {"values": values.detach().to(output_device).clone()}
         if method == "spatial":
             validate_affine(feature.grid_to_original, batch_size, "grid_to_original")
             extent = feature.extent_in_original
@@ -151,8 +151,8 @@ def extract(model, batch, method, execution):
             required = supplied_extent(batch).to(extent)
             if (extent[:, :2] > required[:, :2] + 1e-5).any() or (extent[:, 2:] < required[:, 2:] - 1e-5).any():
                 raise ValueError("Spatial output extent does not cover all supplied image content; cropped readouts are unsupported")
-            result["grid_to_original"] = feature.grid_to_original.detach().cpu().clone()
-            result["extent_in_original"] = extent.detach().cpu().clone()
+            result["grid_to_original"] = feature.grid_to_original.detach().to(output_device).clone()
+            result["extent_in_original"] = extent.detach().to(output_device).clone()
         result["costs"] = {}
         for name, cost in (output.costs or {}).items():
             if not name.endswith(("_count", "_fraction", "_seconds", "_bytes", "_joules", "_flops")):

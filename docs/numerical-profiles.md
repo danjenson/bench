@@ -3,7 +3,7 @@
 `fp32-v1` is the Python API and CLI default. The released monitoring recipe
 uses FP32 for classification and segmentation, with the same profile for every
 checkpoint. CPU execution uses FP32. `bf16-v1` remains an explicit CUDA option;
-its availability does not establish parity with a reference score.
+its availability does not establish parity with a reference score. The ADE20K DINOv3 recipe allows only `fp32-v1`, matching its reference training configuration.
 
 A reference comparison must match the numerical profile recorded with that
 reference. Qualifying BF16 requires matched real evaluations under the same

@@ -9,6 +9,20 @@ from bench.storage import digest, write_json
 
 
 @pytest.fixture
+def historical_ade_recipe():
+    """Archived fixed-bank recipe, solely for historical calibration readers."""
+    from importlib.resources import files
+    from omegaconf import OmegaConf
+
+    config = OmegaConf.to_container(OmegaConf.load(files("bench.cli.configs.task").joinpath("recipes.yaml")), resolve=True)
+    task = {**config["common"], **config["segmentation"], "name": "ade20k", "source": "ade20k", "kind": "segmentation",
+            "id": "ade20k-linear-v1", "classes": 150, "label_rule": "source-0-ignore-source-1-through-150-minus-one"}
+    task["probe"] = {**config["probe_defaults"], **task["probe"]}
+    task["digest"] = digest(task)
+    return task
+
+
+@pytest.fixture
 def historical_monitor_recipes(monkeypatch):
     """Explicit 100-update inputs for retained diagnostic-identity tests."""
     module = importlib.import_module("bench.protocols")

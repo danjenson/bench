@@ -16,7 +16,7 @@ from bench.protocols import recipes
 from bench.storage import digest, file_digest, read_json, write_json
 
 
-def test_ade_search_verifier_reconstructs_dense_counts_and_rejects_corruption(tmp_path, monkeypatch):
+def test_ade_search_verifier_reconstructs_dense_counts_and_rejects_corruption(tmp_path, monkeypatch, historical_ade_recipe):
     root = tmp_path / "data"
     source = root / "ADEChallengeData2016"
     for split, count in [("training", 10), ("validation", 2)]:
@@ -30,6 +30,7 @@ def test_ade_search_verifier_reconstructs_dense_counts_and_rejects_corruption(tm
             Image.fromarray(mask).save(source / "annotations" / split / f"{index}.png")
     (source / "objectInfo150.txt").write_text("Idx\tName\n" + "\n".join(f"{i}\tclass-{i}" for i in range(1, 151)))
     protocols = deepcopy(recipes())
+    protocols["ade20k"] = historical_ade_recipe
     task = protocols["ade20k"]
     task.update(canvas=16, development_fraction=0.2)
     task["probe"].pop("search_plan", None)

@@ -101,7 +101,7 @@ def test_full_probe_calibration_preserves_recipe_and_prunes_variants(clevr_data,
         expected_score = 100 * sum(r["label"] == r["prediction"] for r in records) / len(records)
         assert decay["results"][variant["id"]]["metrics"][variant["metric"]] == expected_score
     assert decay_plan["gates"]["budget_absolute_percentage_points"] == {}
-    with pytest.raises(ValueError, match="searched grid with a positive upper bound"):
+    with pytest.raises(ValueError, match="Fixed-bank calibration does not support online ADE20K"):
         measure(model, names=["ade20k"], data_root=root, output=tmp_path / "fixed-decay", execution=Execution(device="cpu", numerics="fp32-v1"), stage="search-weight-decay")
     assert not (tmp_path / "fixed-decay").exists()
 

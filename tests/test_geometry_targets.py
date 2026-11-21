@@ -51,7 +51,7 @@ def test_ade_rejects_labels_outside_source_range(tmp_path, value):
         read_mask(path, resolve_names(["ade20k"])[0])
 
 
-@pytest.mark.parametrize("name", ["pascal", "ade20k"])
+@pytest.mark.parametrize("name", ["pascal"])
 @pytest.mark.parametrize("size", [(37, 19), (19, 37), (29, 29), (1, 11)])
 def test_label_preparation_matches_rendered_canvas_without_rgb_decoding(tmp_path, monkeypatch, name, size):
     from pathlib import Path

@@ -1,6 +1,7 @@
 """Task-owned canvases and affine geometry shared by evaluation and reports."""
 
 from dataclasses import dataclass
+import math
 
 import numpy as np
 from PIL import Image
@@ -13,6 +14,20 @@ class Canvas:
     to_original: np.ndarray
     resized_size: tuple[int, int]
     offset: tuple[int, int]
+
+
+def resize_short_size(size, short):
+    width, height = size
+    return (int(short * width / height + 0.5), short) if width >= height else (short, int(short * height / width + 0.5))
+
+
+def window_boxes(height, width, side, stride):
+    for y in range(math.ceil(max(height - side, 0) / stride) + 1):
+        bottom = min(y * stride + side, height)
+        top = max(0, bottom - side)
+        for x in range(math.ceil(max(width - side, 0) / stride) + 1):
+            right = min(x * stride + side, width)
+            yield top, bottom, max(0, right - side), right
 
 
 def fit_pad_geometry(size, side):
@@ -28,6 +43,10 @@ def make_canvas(image, task):
     image = image.convert("RGB")
     width, height = image.size
     side = task["canvas"]
+    if task["transform"] == "resize-short-sliding-window":
+        resized = resize_short_size(image.size, side)
+        canvas = image.resize(resized, Image.Resampling.BILINEAR)
+        return Canvas(canvas, np.ones((resized[1], resized[0]), dtype=bool), np.eye(3, dtype=np.float32), resized, (0, 0))
     if task["transform"] == "resize-center-crop":
         short = task["resize_short"]
         # Pin floor rounding, matching torchvision's integer resize convention.
@@ -45,6 +64,8 @@ def make_canvas(image, task):
 
 
 def mask_canvas(mask, canvas):
+    if canvas.image.width != canvas.image.height:
+        return np.array(Image.fromarray(mask.astype(np.uint8)).resize(canvas.resized_size, Image.Resampling.NEAREST), dtype=np.int64)
     return fit_pad_mask(mask, canvas.image.width, canvas.resized_size, canvas.offset)
 
 

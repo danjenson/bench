@@ -23,7 +23,7 @@ Callers select an explicit list of named benchmarks. Each name resolves to one f
 | `imagenet-100` | `imagenet100-full-linear-v1` | ImageNet-100 | All training images; official validation top-1 accuracy |
 | `pascal` | `voc2012-linear-v1` | PASCAL VOC2012 | Frozen spatial features, linear pixel classifier; mIoU |
 | `imagenet-1k` | `imagenet1k-reimagenet-full-linear-v1` | ImageNet-1K | All training images; ReImageNet selection/reporting top-1 and original-label top-1 |
-| `ade20k` | `ade20k-linear-v1` | ADE20K scene parsing challenge | Frozen spatial features, linear pixel classifier; mIoU |
+| `ade20k` | `ade20k-dinov3-linear-v1` | ADE20K scene parsing challenge | Frozen spatial features, linear pixel classifier; mIoU |
 | `spair71k` | `spair71k-match-v1` | SPair-71k | Cosine feature matching; PCK@0.1 |
 | `clevr-count` | `clevr-count-v1` | CLEVR | Frozen global features, linear classifier; accuracy |
 | `clevr-distance` | `clevr-distance-v1` | CLEVR | Frozen global features, linear classifier; accuracy |
@@ -166,7 +166,7 @@ Use semantic versioning for the package. Freeze the documented interface at 1.0 
 
 A result records the readable task identifier, resolved task digest, extraction identity, and evaluation partition separately. Task-recipe overrides are rejected in v1; changing a recipe requires publishing a distinct task identifier. Comparisons must show the readout, extraction recipe, input access, and resource budget; sharing a task identifier alone does not establish a matched experiment.
 
-The initial recipes use fixed features, extracted once per example and extraction identity within active work and reused for all probe epochs. Regeneration repeats that extraction after pruning. They are not automatically equivalent to evaluations that repeatedly augment pixels during probe training. Use established implementations as references and compare baselines under the same recipe; do not attach published paper scores to a changed recipe.
+Except for ADE20K, the recipes use fixed features, extracted once per example and extraction identity within active work and reused for all probe epochs. Regeneration repeats that extraction after pruning. They are not automatically equivalent to evaluations that repeatedly augment pixels during probe training. Use established implementations as references and compare baselines under the same recipe; do not attach published paper scores to a changed recipe.
 
 ### Supported reference models
 
@@ -178,21 +178,21 @@ The supported-reference manifest records eligibility and qualification separatel
 
 ### Initial frozen probe recipes
 
-The following define the initial grids and native budgets for `imagenet-1k`, `clevr-count`, `clevr-distance`, and `ade20k`. Each named benchmark owns its resolved recipe. The deterministic coordinate search and selected-setting budget checks below are part of that recipe; this table is not the complete search range.
+The following define the initial grids and native budgets for `imagenet-1k`, `clevr-count`, and `clevr-distance`. ADE20K has its own DINOv3 protocol below. Each named benchmark owns its resolved recipe. The deterministic coordinate search and selected-setting budget checks below are part of that recipe; this table is not the complete search range.
 
-| Setting | Global classification | Linear segmentation |
-| --- | --- | --- |
-| Supplied image | ImageNet: shorter side 256, center crop 224. CLEVR: fit entire image into 224 square and pad. | Fit entire image into 512 square and pad. |
-| Feature bank | One fixed representation per source image | One fixed feature grid per source image |
-| Readout | Train-only per-channel standardization, then linear classifier | Train-only per-channel standardization, then a shared linear classifier per location and geometric resampling of logits to the label canvas |
-| Loss | Unweighted cross-entropy, mean over examples in the effective batch | Unweighted cross-entropy, sum over valid pixels divided by their count in the effective batch |
-| Optimizer | AdamW | AdamW |
-| Initial learning-rate grid | 0.001, 0.003, 0.01 | 0.0001, 0.0003, 0.001 |
-| Initial weight-decay grid | 0, 0.1 | 0.01 |
-| Native epoch budget | 50 epochs, probe batch 1024 | 40 epochs, probe batch 16 |
-| Schedule | 10% linear warmup, cosine decay to 0.001 times peak LR | Same |
-| Probe seeds | 0, 1, 2 | 0, 1, 2 |
-| Selection metric | Development top-1 | Development mIoU |
+| Setting | Global classification |
+| --- | --- |
+| Supplied image | ImageNet: shorter side 256, center crop 224. CLEVR: fit entire image into 224 square and pad. |
+| Feature bank | One fixed representation per source image |
+| Readout | Train-only per-channel standardization, then linear classifier |
+| Loss | Unweighted cross-entropy, mean over examples in the effective batch |
+| Optimizer | AdamW |
+| Initial learning-rate grid | 0.001, 0.003, 0.01 |
+| Initial weight-decay grid | 0, 0.1 |
+| Native epoch budget | 50 epochs, probe batch 1024 |
+| Schedule | 10% linear warmup, cosine decay to 0.001 times peak LR |
+| Probe seeds | 0, 1, 2 |
+| Selection metric | Development top-1 |
 
 
 The controller first evaluates the declared initial Cartesian grid with seed
@@ -208,7 +208,6 @@ This is a coordinate search rather than a full Cartesian sweep of both ladders.
 | `imagenet-1k` | 1e-05, 3e-05, 0.0001, 0.0003, 0.001, 0.003, 0.01, 0.03, 0.1 | 0, 0.1, 1, 10 |
 | `clevr-count` | 1e-05, 3e-05, 0.0001, 0.0003, 0.001, 0.003, 0.01, 0.03, 0.1, 0.3, 1 | 0, 0.1, 1, 10 |
 | `clevr-distance` | 1e-05, 3e-05, 0.0001, 0.0003, 0.001, 0.003, 0.01, 0.03, 0.1, 0.3, 1 | 0, 0.1, 1, 10 |
-| `ade20k` | 1e-05, 3e-05, 0.0001, 0.0003, 0.001, 0.003, 0.01, 0.03, 0.1, 0.3, 1 | 0.01 |
 
 Only the selected setting receives budget checks. Compare the native budget to
 twice that budget with seed zero; if the absolute development-score difference
@@ -228,11 +227,11 @@ Those results do not assert that every caller-owned representation will have an
 interior optimum or pass the finite budget checks. Caller comparisons retain
 their own selected settings, budgets and flags.
 
-Use standardization statistics from the probe training partition only: over examples for global features and valid feature locations for spatial features. Pin weighting and the variance floor in the task manifest. Use FP32 for losses, statistics, and metric accumulation. Exclude padding and official ignore labels from segmentation loss and mIoU. Preserve full CLEVR scenes in the supplied image: cropping the task input would change counting targets. Recipes with a probe search select the best development checkpoint, breaking ties by earlier epoch then listed candidate order. Keep only the current candidate's best checkpoint and the search winner's checkpoint while searching; delete losing weights as soon as selection permits. Retain compact candidate scores and selection metadata. Do not save auxiliary last checkpoints or optimizer state for completed candidates.
+For fixed-bank probes, use standardization statistics from the probe training partition only: over examples for global features and valid feature locations for spatial features. Pin weighting and the variance floor in the task manifest. Use FP32 for losses, statistics, and metric accumulation. PASCAL excludes padding and official ignore labels from its loss denominator and mIoU. ADE20K uses the reference loss reduction described below. Preserve full CLEVR scenes in the supplied image: cropping the task input would change counting targets. Recipes with a probe search select the best development checkpoint, breaking ties by earlier epoch then listed candidate order. Keep only the current candidate's best checkpoint and the search winner's checkpoint while searching; delete losing weights as soon as selection permits. Retain compact candidate scores and selection metadata. Do not save auxiliary last checkpoints or optimizer state for completed candidates.
 
-The recipes in the table tune hyperparameters with seed 0 only and rerun the selected settings with seeds 1 and 2. Seeds measure probe variability, not independent pretraining variability. ImageNet uses the same official validation set for selection and final reporting; other tasks do not select seeds or checkpoints on final data. Optimizer batch sizes belong to the protocol; `Execution.batch_size` controls feature extraction only. Memory-saving accumulation must preserve sample order, effective probe batch, update count, and loss normalization. For segmentation, divide summed microbatch pixel losses by the valid-pixel count of the entire effective batch; averaging microbatch means is not equivalent. Pin shuffling, final partial-batch handling, and scoring cadence in the task manifest.
+The recipes in the table tune hyperparameters with seed 0 only and rerun the selected settings with seeds 1 and 2. Seeds measure probe variability, not independent pretraining variability. ImageNet and ADE20K use the same official validation set for selection and final reporting; the other tasks keep their reporting partition separate. Optimizer batch sizes belong to the protocol; `Execution.batch_size` controls feature extraction only. Memory-saving accumulation must preserve sample order, effective probe batch, update count, and loss normalization. For PASCAL segmentation, divide summed microbatch pixel losses by the valid-pixel count of the entire effective batch; averaging microbatch means is not equivalent. Pin shuffling, final partial-batch handling, and scoring cadence in the task manifest.
 
-Every learned probe is initialized afresh for each model checkpoint using its prescribed seed, sample bank, and training budget. No classifier weights or optimizer state carry over from an earlier training epoch. A classifier updated alongside a changing encoder is an online probe with a different interpretation and is outside this package's frozen-representation protocol. Fitted-probe identity includes the extraction identity, training/development sample manifests, task digest, numerical profile, and probe seed; it excludes the reporting partition, requested benchmark list, and output directory. A verified completed selection includes the selected heads, training-only normalization statistics, and candidate/epoch selection metadata. Final evaluation reuses that selection from the active workspace without fitting or searching again. If it has been pruned, rebuild it using the same training/development protocol before reading final data, and record that regeneration occurred. Retention policy must never change the selection protocol.
+Every learned probe is initialized afresh for each model checkpoint using its prescribed seed, sample bank, and training budget. No classifier weights or optimizer state carry over from an earlier training epoch. A classifier updated alongside a changing encoder is an online probe with a different interpretation and is outside this package's frozen-representation protocol. Fitted-probe identity includes the extraction identity, training/development sample manifests, task digest, numerical profile, and probe seed; it excludes the reporting partition, requested benchmark list, and output directory. A verified completed selection includes the selected heads, training-only normalization statistics (or trained batch-normalization buffers for ADE20K), and candidate/checkpoint selection metadata. Final evaluation reuses that selection from the active workspace without fitting or searching again. If it has been pruned, rebuild it using the same training/development protocol before reading final data, and record that regeneration occurred. Retention policy must never change the selection protocol.
 
 `imagenet-100` and `pascal` use fixed optimizer settings and seed 0, scoring the final probe update. Freeze sample counts, resolution, optimizer settings, and update counts in their task manifests. Calibrate sample counts and probe budgets using early, middle, late, and nearby checkpoints from supported public CNN and ViT model releases. Predeclare the checkpoint pairs and reserve checkpoints for acceptance after choosing the recipe. Measure setup, fresh feature extraction, probe fitting, and scoring separately, and report total latency with a new model-state digest and no reusable feature cache, plus contention when sharing a training GPU.
 
@@ -296,7 +295,7 @@ passing monitoring result. The archived policy and explicit instruction are in
 
 For ImageNet-1K and ImageNet-100, use all official training images for probe fitting and the official validation images for both selection and final reporting. Record `split_rule: official-train-validation`; `development` and `final` manifests contain identical validation records, disjoint from training. ImageNet-1K has 1,281,167 training and 50,000 validation images; ImageNet-100 has 126,689 and 5,000. ImageNet-1K uses ReImageNet accepted labels for selection and primary reporting, with original-label accuracy retained separately. Training uses original single labels. ImageNet-100 uses original labels throughout. Pin label-release hashes and eligibility counts.
 
-For ADE20K, VOC and CLEVR, create a fixed development partition from the official training set and reserve official validation for final reporting. Persist exact manifests with deterministic source-image grouping. Do not refit on development data in v1. SPair uses its official train/validation/test partitions, with validation for monitoring and test for final reporting. For these tasks, final evaluation must not select the training checkpoint or change the recipe. All split choices and selection exposure must be visible in results.
+For VOC and CLEVR, create a fixed development partition from the official training set and reserve official validation for final reporting. Persist exact manifests with deterministic source-image grouping. Do not refit on development data in v1. SPair uses its official train/validation/test partitions, with validation for monitoring and test for final reporting. For these tasks, final evaluation must not select the training checkpoint or change the recipe. All split choices and selection exposure must be visible in results.
 
 The adapter recipe must record declared pretraining datasets/splits and data used for training-checkpoint or architecture selection, with explicit unknown entries when provenance is unavailable. Results distinguish pretraining image exposure from use of evaluation labels or scores for selection. `evaluation="final"` identifies a benchmark reporting partition; it cannot make previously used validation images untouched. If that partition influenced earlier model selection, report the exposure and do not describe its score as an untouched held-out result. New training integrations adopt the benchmark development split before selecting checkpoints; existing checkpoints retain their actual selection history.
 
@@ -305,6 +304,23 @@ Sample banks are ordered source-image IDs and targets, not copied image collecti
 Before freezing recipes, calibrate on established public CNN and ViT representations with pretrained positive controls and internal weak controls from the same released model implementations. Check sensitivity to feature scaling, doubling the probe training budget, and optima at search-grid boundaries where a search is used. Resolve undertraining or inadequate search coverage on development data and record the evidence before assigning v1 identifiers.
 
 For each task, the release manifest must pin: dataset edition and checksums, ordered sample IDs, split assignment, label mapping, transforms and interpolation, feature normalization, metric aggregation, probe settings, seed set, numerical profile, and reference implementation revision. The validation milestone must fill and review every field before a task is advertised as released.
+
+### ADE20K DINOv3 linear probing
+
+`ade20k` has one selectable recipe, `ade20k-dinov3-linear-v1`, replacing the former fixed-canvas protocol. The reference is pinned to `facebookresearch/dinov3@6876159a11b4df116f30f667f8c9888617df0751`, particularly `eval/segmentation/{transforms.py,train.py,schedulers.py,loss.py,models/heads/linear_head.py}` and `configs/config-ade20k-linear-training.yaml`. The implementation is independent and uses the existing model adapter seam.
+
+Use all 20,210 official training images and the 2,000 official validation images for both selection and reporting. There is no training holdout, and `final` is not a separately held-out test partition. Preparation retains identical development/final manifests. Historical `ade20k-linear-v1` evidence is not evidence for this task ID.
+
+For each training draw, resize the short side to `int(512 × U[0.5, 2.0))`, preserving aspect ratio with nearest-integer long-side rounding. Use Pillow bilinear RGB resizing and tensor nearest-neighbour mask resizing. Take a random 512-square crop, trying an initial crop plus up to ten replacements to find at least two non-ignore classes with maximum class fraction below 0.75. Flip horizontally with probability 0.5, then apply the reference brightness, contrast, saturation and hue distortion. Pad small crops on the bottom/right with the ImageNet mean RGB and ignore-label masks, equivalent to zero padding after the reference normalization. Adapters receive RGB in [0,1], valid content and the crop/flip affine; normalization and the model's final-layer normalization remain adapter-owned. Use post-normalization final patch features for a DINOv3 comparison; no CLS token or intermediate-layer concatenation.
+
+The encoder is frozen and evaluated in inference mode on each fresh crop. The head is dropout 0.1 → affine batch normalization → 1×1 convolution, with convolution weights sampled from N(0, 0.01²) and zero bias. Batch normalization sees the full effective batch of 16, equivalent to the reference synchronized batch normalization. FP32 is required throughout. The benchmark can chunk encoder calls independently without changing head batch statistics. Ignore labels have zero cross-entropy contribution, but the loss denominator includes all batch canvas pixels, matching the reference `avg_non_ignore=False`. Dense losses are differentiated one image at a time and propagated through the shared coarse-logit graph once.
+
+Fit six independent candidates at seed 100: learning rates {0.0001, 0.0003, 0.001} × weight decays {0.0001, 0.001}. AdamW uses β=(0.9,0.999), ε=1e-8, and weight decay on all head parameters. Each candidate runs 40,000 updates with fresh shuffled full batches, 1,500 warmup updates, and the pinned `WarmupOneCycleLR` schedule (including its first-step offset and warmup ratio 1e-6). Evaluate every 5,000 updates and at the final update. Select maximum validation mIoU, breaking ties by earlier update then candidate order. There is no coordinate-search expansion, adaptive budget extension or three-seed reporting.
+
+At evaluation, resize the short side to 512. Predict 512-square windows at stride 341, shifting the final window to the far edge so every pixel is covered. Bilinearly resample each window's logits using adapter geometry, average overlapping logits, then bilinearly resize the complete logit map to the original mask dimensions before argmax. Score original labels with dataset-level mIoU, excluding source label zero and absent classes. No test-time flips or multiple scales. Full-image aggregation lives on the host; only a window's dense logits need GPU memory.
+
+There is no fixed feature bank or training-set standardization file for this protocol. Completed selection stores the winning head including batch-normalization statistics, candidate scores and checksums. Losing heads are removed. A shared workspace can reuse a verified selection; incomplete sweeps restart deterministically. Augmentation draws use private per-draw RNGs, so worker count does not affect sampling; distributed sampler bitwise parity is not claimed. Preserve the caller's model state, modes and RNGs. Record training/selection and final-scoring encoder-view counts and costs separately. Fixed-bank feature diagnostics are explicitly uncomputed. Full-data score and runtime calibration remain pending; synthetic tests do not establish published-score parity.
+
 
 ## Dataset acquisition and preparation
 
@@ -358,11 +374,11 @@ Use the same preparation, target-generation, coordinate transforms, ignore rules
 
 The GPU path uses eager execution, pinned host memory, bounded prefetch, and inference mode scoped to adapter execution. Measure setup, warmup, and total evaluation time as well as steady-state throughput. Compilation and its configuration/parity machinery are deferred beyond v1.
 
-Within active work, store the final representation per sample, output, and complete extraction identity; retain usable cold-preflight outputs. Reuse features across hyperparameter candidates, seeds, and compatible requested tasks, including both CLEVR labels. For SPair, extract each distinct image once rather than once per pair. Internal observations or intermediate features are the adapter's responsibility. Changing model weights invalidates feature reuse. Delete each feature bank, its per-example costs, and intermediate predictions once its last consumer in the active run has committed results or a reusable probe selection. Do not retain banks for hypothetical later requests.
+For fixed-bank tasks, store the final representation per sample, output, and complete extraction identity; retain usable cold-preflight outputs. Reuse features across hyperparameter candidates, seeds, and compatible requested tasks, including both CLEVR labels. For SPair, extract each distinct image once rather than once per pair. Internal observations or intermediate features are the adapter's responsibility. Changing model weights invalidates feature reuse. Delete each feature bank, its per-example costs, and intermediate predictions once its last consumer in the active run has committed results or a reusable probe selection. Do not retain banks for hypothetical later requests.
 
 Store temporary banks as immutable, bounded tensor shards with an indexed manifest; use memory-mapped reads where supported and allow a bounded working set in memory. Preserve the produced feature dtype, spatial geometry and extent, and per-example extraction costs while needed. The implementation must operate without fitting all features in RAM or requiring a database service. Extraction identity includes model-state digest, adapter source revision/readouts/recipe, dataset/sample identity, input preprocessing, requested method/output, numerical profile, and relevant software versions. Global and spatial results never share a bank merely because their feature widths match. Display names alone are never cache keys. Labels and probe hyperparameters do not belong in the feature key, but do belong in task/result identities.
 
-Acquire exclusive locks for the output directory and workspace before checking identities or mutating state. Concurrent requests targeting either location fail with an actionable busy message; a shared workspace has one active owner. Check the output identity under its lock. Write each shard atomically, then atomically commit its manifest entry. Publish probe-selection records, run manifests, and results atomically only after their referenced artifacts are complete. An interrupted extraction resumes only completed, verified shards. Incomplete probe candidates restart from the beginning in v1; completed candidate scores and surviving selected weights are reused. Repeated requests for a completed run with the same identity return its durable results without rebuilding deleted working state, after finishing any pending cleanup owned by that run. A conflicting identity in the same output directory fails rather than overwriting it.
+Acquire exclusive locks for the output directory and workspace before checking identities or mutating state. Concurrent requests targeting either location fail with an actionable busy message; a shared workspace has one active owner. Check the output identity under its lock. Write each shard atomically, then atomically commit its manifest entry. Publish probe-selection records, run manifests, and results atomically only after their referenced artifacts are complete. An interrupted extraction resumes only completed, verified shards. Incomplete probe candidates restart from the beginning in v1; completed candidate scores and surviving selected weights are reused for fixed-bank tasks. ADE20K reuses only a fully committed sweep selection; an incomplete sweep restarts. Repeated requests for a completed run with the same identity return its durable results without rebuilding deleted working state, after finishing any pending cleanup owned by that run. A conflicting identity in the same output directory fails rather than overwriting it.
 
 ### State lifetime and regeneration
 
@@ -376,7 +392,7 @@ Regeneration requires the caller's original model checkpoint, source datasets, r
 
 Preflight estimates peak temporary storage from sample count, feature shape, dtype, simultaneously live banks, probes, and atomic-write overhead. Dense banks can be tens of gigabytes even for small backbones. Prune obsolete owned state before allocating new banks, check available space, stream shards, and report the estimate before extraction. Never silently shrink a dataset, lower its resolution, change precision, or delete unrelated state to fit a budget.
 
-Measure dense probe execution early, including feature reads, full-resolution logit resampling, loss/backward, fitting, development scoring, and cleanup. ADE20K fits the independent candidates requested by its coordinate controller and budget checks. An illustrative 20,000-image bank of 768×32×32 BF16 features occupies 31.5 GB and entails about 6.3 TB of logical feature reads across 200 training passes; physical disk traffic depends on memory caching. A 16×150×512×512 FP32 logit tensor alone occupies 2.34 GiB before gradients and temporaries. Independent heads may share feature reads when measurements justify it, while retaining separate initialization, optimizer state, batches, update counts, and checkpoint selection. Choose optimizations from these measurements rather than requiring a parallel-head implementation in v1.
+Measure dense probe execution early, including feature reads, full-resolution logit resampling, loss/backward, fitting, development scoring, and cleanup. ADE20K fits six candidates for 40,000 updates each and re-extracts augmented features; it has no dense feature-bank disk cost. Include repeated encoder execution and sliding validation in runtime measurements. A 16×150×512×512 FP32 logit tensor alone occupies 2.34 GiB before gradients and temporaries. Independent heads may share feature reads when measurements justify it, while retaining separate initialization, optimizer state, batches, update counts, and checkpoint selection. Choose optimizations from these measurements rather than requiring a parallel-head implementation in v1.
 
 Optimization acceptance is measured against the same unoptimized protocol: equal sample counts and predictions within tolerance, plus cold/reused-state wall time, images per second, peak GPU memory, peak host memory, peak temporary bytes, and bytes retained after completion. Reading a valid existing feature bank or completed result must invoke the encoder zero times; a new run after pruning must regenerate missing features. Label these cases separately. No arbitrary speedup is promised before measurement. Start with one process and one GPU; external pueue/SLURM jobs can evaluate checkpoints independently using separate workspaces.
 
@@ -441,7 +457,7 @@ src/bench/
   features.py         # extraction and disposable feature banks
   tasks/
     classification.py # ImageNet and CLEVR definitions/probes
-    segmentation.py   # ADE20K and VOC definitions/probe
+    segmentation.py   # ADE20K and VOC source/label definitions
     correspondence.py # SPair matching
   adapters/           # only shipped reference adapters
   cli/

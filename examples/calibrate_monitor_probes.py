@@ -68,6 +68,8 @@ def measure(model, *, names, data_root, output, execution, stage="budget-scale",
     if stage not in ("budget-scale", "variance-floor", "learning-rate", "convergence", "fast-convergence", "long-convergence", "candidate-budget", "candidate-long-budget", "candidate-selection", "candidate-regularized", "candidate-regularized-long", "candidate-regularized-tail", "selected-monitor", "fuller-reference", "fuller-convergence", "fuller-selection", "selected-fuller", "search-boundary", "search-extension", "search-weight-decay", "search-grid"):
         raise ValueError("Choose the budget-scale, variance-floor, learning-rate, convergence, fuller-reference, fuller-convergence, fuller-selection, search-boundary, search-extension, search-weight-decay or search-grid calibration stage")
     tasks = resolve_names(names)
+    if any(task.get("execution") == "online-segmentation" for task in tasks):
+        raise ValueError("Fixed-bank calibration does not support online ADE20K; use bench.run with its DINOv3 recipe")
     monitor_cases = selected_monitor_cases(tasks, monitor_recipe) if stage == "selected-monitor" else {}
     if stage != "selected-monitor":
         assert monitor_recipe is None

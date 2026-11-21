@@ -55,7 +55,7 @@ def test_dense_resampling_cuda_values_and_gradients(grid_device, canvas_device):
 
 @pytest.mark.gpu
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA integration job")
-@pytest.mark.parametrize("name", ["pascal", "ade20k"])
+@pytest.mark.parametrize("name", ["pascal"])
 def test_packed_targets_preserve_cuda_probe_training(name, tmp_path, monkeypatch):
     from bench.features import numerical_mode
     from bench.probes import PreparedTargets, normalization, train_candidate

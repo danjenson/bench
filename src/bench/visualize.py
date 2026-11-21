@@ -7,7 +7,7 @@ from pathlib import Path
 import numpy as np
 from PIL import Image, ImageDraw
 
-from .images import make_canvas, mask_canvas, original_to_canvas
+from .images import make_canvas, mask_canvas, original_to_canvas, window_boxes
 from .prepare import load_prepared
 from .protocols import resolve_names
 from .storage import atomic_write, contained_path, lock, read_json, resolve_path, write_json
@@ -35,6 +35,8 @@ def select_examples(rows):
 
 def explain(task):
     canvas = task["canvas"]
+    if task.get("execution") == "online-segmentation":
+        return f"DINOv3 linear probing: fresh random-scale {canvas} × {canvas} training crops, flips and photometric augmentation; a frozen encoder and dropout, batch normalization and a linear head. Evaluation resizes the short side to {canvas}, averages overlapping windows at stride {task['evaluation_stride']}, then resizes logits to the ORIGINAL mask resolution before scoring. The official validation set selects and reports the head."
     if task["source"] == "imagenet":
         scoring = "Top-1 accepts any ReImageNet label or equivalent class; images without known labels are excluded." if task.get("final_labels") else f"Top-1 requires the original label from this recipe's {task['classes']}-class set."
         return f"The model receives a {canvas} × {canvas} center crop after resizing the shorter side to {task['resize_short']} pixels. A linear classifier learns from all official training images. Selection and reporting use the same official validation images. {scoring}"
@@ -102,6 +104,11 @@ def render_example(root, task, labels, row, annotation=None):
     if task["kind"] == "segmentation":
         annotated, legend = segmentation_figure(canvas, read_mask(contained_path(root, row["mask"]), task), labels)
         caption = "Training target: semantic mask. Pink hatching: annotation ignore. Slate hatching: padding. Neither is scored."
+        if task.get("execution") == "online-segmentation":
+            draw = ImageDraw.Draw(annotated)
+            for top, bottom, left, right in window_boxes(plain.height, plain.width, task["canvas"], task["evaluation_stride"]):
+                draw.rectangle((left, top, right - 1, bottom - 1), outline="white", width=2)
+            caption = "Resized evaluation image; each white-outlined window is a separate encoder input. Mask overlay is for display only; mIoU uses original-resolution labels. Pink hatching marks ignored labels."
     elif task["kind"] == "correspondence":
         with Image.open(contained_path(root, row["target_image"])) as stream:
             target_original = stream.convert("RGB")

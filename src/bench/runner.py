@@ -14,6 +14,7 @@ from omegaconf import OmegaConf
 import torch
 
 from .api import Execution, RunResult, VisionModel
+from . import ade20k
 from .features import build_bank, feature_diagnostics, feature_identity, model_identity, numerical_mode, storage_estimate, validate_execution
 from .prepare import load_prepared
 from .probes import evaluate_selection, fit_probe, probe_identity, read_selection
@@ -72,8 +73,7 @@ def run(model: VisionModel, *, names: list[str], evaluation="development", data_
         stack.enter_context(workspace_lock(work))
         metadata = model_identity(model, execution)
         prepared = {}
-        # ImageNet development means official validation, also used for reporting.
-        # Other tasks keep separate development and final examples.
+        # Official-train-validation recipes share selection and reporting data.
         for task in tasks:
             if task["kind"] == "correspondence":
                 manifest, rows = load_prepared(root, task, "development")
@@ -131,12 +131,23 @@ def run(model: VisionModel, *, names: list[str], evaluation="development", data_
         first_result_seconds = 0.0 if result["metrics"] else None
         try:
             early_extractions = {}
+            online_encoders = {}
             planned_banks, planned_probes = {}, 0
             for task in tasks:
                 identifier = task["id"]
                 if result["tasks"].get(identifier, {}).get("status") == "complete":
                     continue
                 manifest, training, development = prepared[identifier]
+                if task.get("execution") == "online-segmentation":
+                    result["tasks"][identifier] = {"status": "running", "evaluation": evaluation}
+                    if execution.numerics not in task["numerics"]:
+                        raise ValueError("DINOv3 ADE20K requires numerics='fp32-v1'")
+                    encoder = ade20k.preflight(model, execution, Path(manifest["source_root"]), training[0], task)
+                    online_encoders[identifier] = encoder
+                    width = encoder.shape[0]
+                    # Winner, active candidate and atomic copy, including BN buffers.
+                    planned_probes += 3 * (4 * (task["classes"] * (width + 1) + 4 * width) + 65536)
+                    continue
                 selection = read_selection(work / "probes" / probe_identity(task, manifest, metadata)) if task["kind"] != "correspondence" else None
                 if task["kind"] == "correspondence":
                     _, rows = load_prepared(root, task, evaluation)
@@ -210,7 +221,14 @@ def run(model: VisionModel, *, names: list[str], evaluation="development", data_
                     active_banks[bank.directory] = bank
                     return bank, usage
 
-                if task["kind"] == "correspondence":
+                if task.get("execution") == "online-segmentation":
+                    _, scoring_rows = load_prepared(root, task, evaluation)
+                    selection_directory = work / "probes" / probe_identity(task, manifest, metadata)
+                    metrics, records, details = ade20k.run_probe(model, execution, source, training, development, scoring_rows,
+                        task, selection_directory, storage, evaluation, online_encoders[identifier])
+                    task_result.update(details)
+                    extraction_done = time.monotonic()
+                elif task["kind"] == "correspondence":
                     if evaluation == "final":
                         _, scoring_rows = load_prepared(root, task, "final")
                     else:

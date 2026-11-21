@@ -440,7 +440,9 @@ def read_selection(directory):
     selection = read_json(path)
     if selection.get("identity") != directory.name or selection.get("digest") != digest({key: value for key, value in selection.items() if key != "digest"}):
         return None
-    artifacts = [("normalization.pt", selection["normalization_sha256"])] + [(seed["head_file"], seed["head_sha256"]) for seed in selection["seeds"]]
+    artifacts = [(seed["head_file"], seed["head_sha256"]) for seed in selection["seeds"]]
+    if selection.get("normalization_sha256") is not None:
+        artifacts.append(("normalization.pt", selection["normalization_sha256"]))
     for filename, expected in artifacts:
         artifact = contained_path(directory, filename)
         if not artifact.exists() or file_digest(artifact) != expected:

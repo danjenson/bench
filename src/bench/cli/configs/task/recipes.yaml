@@ -275,70 +275,51 @@ tasks:
       - 1.0
     canvas: 160
   ade20k:
-    id: ade20k-linear-v1
+    id: ade20k-dinov3-linear-v1
     source: ade20k
     kind: segmentation
     classes: 150
     label_rule: source-0-ignore-source-1-through-150-minus-one
+    execution: online-segmentation
+    release_status: implementation-validated-dataset-calibration-pending
+    reference: facebookresearch/dinov3@6876159a11b4df116f30f667f8c9888617df0751/dinov3/eval/segmentation
+    split_rule: official-train-validation
+    development_fraction: null
+    transform: resize-short-sliding-window
+    image_interpolation: pillow-bilinear
+    label_interpolation: torch-nearest-training-original-evaluation
+    evaluation_stride: 341
+    evaluation_resolution: original-mask
+    numerics: [fp32-v1]
+    standardization: null
+    augmentation:
+      scale_range: [0.5, 2.0]
+      category_max_ratio: 0.75
+      crop_attempts: 11
+      flip_probability: 0.5
+      photometric: dinov3-brightness-contrast-saturation-hue
+      padding_rgb: [0.485, 0.456, 0.406]
     probe:
-      amsgrad: false
-      batch_size: 16
-      betas:
-      - 0.9
-      - 0.999
-      budget_validation:
-        absolute_percentage_points: 0.1
-        multipliers:
-        - 1
-        - 2
-        - 4
-        - 8
-        - 16
-        - 32
-        - 64
-      epochs: 40
-      epsilon: 1.0e-08
-      final_lr_fraction: 0.001
-      foreach: false
-      fused: false
-      initialization: weight-uniform-plus-minus-inverse-sqrt-width-bias-zero
-      learning_rates:
-      - 0.0001
-      - 0.0003
-      - 0.001
-      loss: unweighted-cross-entropy-no-label-smoothing
       optimizer: adamw
-      partial_batch: keep
-      scoring: each-epoch
-      search_plan:
-        learning_rate_ladder:
-        - 1.0e-05
-        - 3.0e-05
-        - 0.0001
-        - 0.0003
-        - 0.001
-        - 0.003
-        - 0.01
-        - 0.03
-        - 0.1
-        - 0.3
-        - 1.0
-        method: coordinate
-        weight_decay_ladder:
-        - 0.01
-      search_seed: 0
-      seeds:
-      - 0
-      - 1
-      - 2
-      selection: best-development-score-then-earlier-epoch-then-candidate-order
-      shuffle: private-torch-generator-per-seed
-      statistics_variance: population
-      warmup_fraction: 0.1
-      warmup_rounding: nearest-integer-ties-even-minimum-one-update
-      weight_decay_parameters: weight-and-bias
-      weight_decays:
-      - 0.01
+      batch_size: 16
+      updates: 40000
+      evaluation_interval: 5000
+      learning_rates: [0.0001, 0.0003, 0.001]
+      weight_decays: [0.0001, 0.001]
+      seeds: [100]
+      search_seed: 100
+      search: fixed-cartesian-grid
+      dropout: 0.1
+      normalization: batchnorm2d-affine-running-statistics
+      initialization: normal-std-0.01-bias-zero
+      loss: cross-entropy-ignore-zeroed-mean-over-all-canvas-pixels
+      warmup_updates: 1500
+      warmup_ratio: 1.0e-06
+      schedule: dinov3-warmup-one-cycle-cosine
+      selection: best-validation-miou-then-earlier-update-then-candidate-order
+      scoring: every-5000-updates-and-final
+      shuffle: seeded-per-epoch-drop-last
+      partial_batch: drop
   spair71k:
     id: spair71k-match-v1
     source: spair71k
