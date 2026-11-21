@@ -1,6 +1,7 @@
 """Deterministic source indexing and atomic task sample manifests."""
 
 from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 import time
 
@@ -95,15 +96,22 @@ def validated_partitions(source_root, task, source, inventory):
             if seen & ids:
                 raise ValueError(f"Overlapping partitions in {task['id']}")
             seen.update(ids)
-    for split, rows in partitions.items():
-        if not rows:
-            raise ValueError(f"Empty {split} partition in {task['id']}")
-        for row in rows:
-            row["files"] = {}
-            for field in ("image", "target_image", "mask", "annotation"):
-                if field in row:
-                    kind = "image" if field in ("image", "target_image") else field
-                    row["files"][row[field]] = verify_file(source_root, row[field], inventory, kind, task)
+
+    def verify(row):
+        row["files"] = {}
+        for field in ("image", "target_image", "mask", "annotation"):
+            if field in row:
+                kind = "image" if field in ("image", "target_image") else field
+                row["files"][row[field]] = verify_file(source_root, row[field], inventory, kind, task)
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        for split, rows in partitions.items():
+            if not rows:
+                raise ValueError(f"Empty {split} partition in {task['id']}")
+            print(f"{task['id']}: verifying {split} ({len(rows)} images)", flush=True)
+            # Bound pending work instead of allocating a future per ImageNet image.
+            for start in range(0, len(rows), 64):
+                list(pool.map(verify, rows[start:start + 64]))
     return partitions, labels
 
 

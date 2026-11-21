@@ -126,3 +126,32 @@ def test_corrupt_manifest_fails_with_matching_command(clevr_data):
     path.write_text(json.dumps(data))
     with pytest.raises(ValueError, match="bench prepare.*clevr-count"):
         load_prepared(root, task, "development")
+
+
+def test_parallel_validation_matches_serial_manifests_and_inventory(clevr_data, monkeypatch):
+    root, _ = clevr_data
+    module = importlib.import_module("bench.prepare")
+    executor = module.ThreadPoolExecutor
+    names = ["clevr-count", "clevr-distance"]
+    with monkeypatch.context() as serial:
+        serial.setattr(module, "ThreadPoolExecutor", lambda **kwargs: executor(max_workers=1))
+        expected = prepare(names=names, data_root=root)
+    inventory = root / ".bench" / "sources" / "clevr.json"
+    expected_inventory = read_json(inventory)
+    inventory.unlink()
+    actual = prepare(names=names, data_root=root)
+    assert expected["ready"] and actual["ready"]
+    assert {key: task["digest"] for key, task in actual["tasks"].items()} == {
+        key: task["digest"] for key, task in expected["tasks"].items()
+    }
+    assert read_json(inventory) == expected_inventory
+
+
+def test_parallel_validation_rejects_corrupt_image_without_publishing(clevr_data):
+    root, source = clevr_data
+    image = next((source / "images" / "train").iterdir())
+    image.write_bytes(b"not an image")
+    report = prepare(names=["clevr-count"], data_root=root)
+    assert not report["ready"]
+    assert report["tasks"]["clevr-count-v1"]["status"] == "incomplete"
+    assert not (root / ".bench" / "prepared" / "clevr-count-v1" / "manifest.json").exists()
