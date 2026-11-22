@@ -141,7 +141,7 @@ def run(model: VisionModel, *, names: list[str], evaluation="development", data_
                 if task.get("execution") == "online-segmentation":
                     result["tasks"][identifier] = {"status": "running", "evaluation": evaluation}
                     if execution.numerics not in task["numerics"]:
-                        raise ValueError("DINOv3 ADE20K requires numerics='fp32-v1'")
+                        raise ValueError(f"{identifier} requires numerics in {task['numerics']}")
                     encoder = ade20k.preflight(model, execution, Path(manifest["source_root"]), training[0], task)
                     online_encoders[identifier] = encoder
                     width = encoder.shape[0]

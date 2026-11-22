@@ -290,7 +290,7 @@ tasks:
     label_interpolation: torch-nearest-training-original-evaluation
     evaluation_stride: 341
     evaluation_resolution: original-mask
-    numerics: [fp32-v1]
+    numerics: [fp32-v1, bf16-v1]
     standardization: null
     augmentation:
       scale_range: [0.5, 2.0]

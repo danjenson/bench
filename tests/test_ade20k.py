@@ -21,7 +21,7 @@ def test_only_ade_recipe_matches_dinov3_and_uses_official_splits():
     task = resolve_names(["ade20k"])[0]
     assert task["id"] == "ade20k-dinov3-linear-v1"
     assert task["canvas"] == 512 and task["evaluation_stride"] == 341
-    assert task["standardization"] is None and task["numerics"] == ["fp32-v1"]
+    assert task["standardization"] is None and task["numerics"] == ["fp32-v1", "bf16-v1"]
     recipe = task["probe"]
     assert recipe["updates"] == 40000 and recipe["batch_size"] == 16
     assert recipe["evaluation_interval"] == 5000 and recipe["warmup_updates"] == 1500
@@ -260,3 +260,57 @@ def test_visualization_describes_sliding_windows(ade_data, tmp_path):
     html = report.read_text()
     assert "original-resolution labels" in html and "stride 11" in html
     assert "official validation set selects and reports" in html
+
+
+@pytest.mark.gpu
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA integration job")
+def test_online_bf16_extraction_keeps_head_fp32_and_separates_profiles(ade_data, tmp_path, monkeypatch):
+    root, task = ade_data
+
+    class AutocastAdapter(SpatialAdapter):
+        def __init__(self):
+            super().__init__()
+            self.projection = torch.nn.Conv2d(3, 3, 1)
+            self.dtypes = set()
+
+        def encode_spatial(self, batch):
+            output = super().encode_spatial(batch)
+            features = output.features
+            values = self.projection(features.values)
+            self.dtypes.add(values.dtype)
+            return bench.Extraction(bench.SpatialFeatures(values, features.grid_to_original, features.extent_in_original), output.costs)
+
+    head_calls = []
+    forward = ade20k.LinearHead.forward
+
+    def checked_forward(head, values):
+        assert values.dtype == torch.float32
+        assert not torch.is_autocast_enabled("cuda")
+        assert all(p.dtype == torch.float32 for p in head.parameters())
+        output = forward(head, values)
+        assert output.dtype == head.norm.running_mean.dtype == torch.float32
+        head_calls.append(head.training)
+        return output
+
+    monkeypatch.setattr(ade20k.LinearHead, "forward", checked_forward)
+    model = AutocastAdapter().cuda().train()
+    before = deepcopy(model.state_dict())
+    reports = []
+    for profile, dtype in [("fp32-v1", torch.float32), ("bf16-v1", torch.bfloat16)]:
+        model.dtypes.clear()
+        execution = bench.Execution(device="cuda", numerics=profile, workers=0, batch_size=1, progress=False, work_dir=tmp_path / "work")
+        result = bench.run(model, names=["ade20k"], data_root=root, output_dir=tmp_path / profile, execution=execution)
+        assert result.status == "complete" and model.dtypes == {dtype}
+        report = read_json(tmp_path / profile / "results.json")
+        details = report["tasks"][task["id"]]
+        assert report["numerics"] == profile and details["feature_dtype"] == str(dtype)
+        assert details["probe_status"] == "fitted"
+        reports.append(report)
+    assert reports[0]["model"]["digest"] != reports[1]["model"]["digest"]
+    assert any(head_calls) and not all(head_calls)
+    assert model.training and all(p.grad is None for p in model.parameters())
+    for name, value in model.state_dict().items():
+        torch.testing.assert_close(value, before[name], rtol=0, atol=0)
+    final = bench.run(model, names=["ade20k"], evaluation="final", data_root=root, output_dir=tmp_path / "final", execution=execution)
+    assert final.metrics == result.metrics
+    assert read_json(tmp_path / "final/results.json")["tasks"][task["id"]]["probe_status"] == "reused"
